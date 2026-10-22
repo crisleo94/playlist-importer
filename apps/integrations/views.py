@@ -1,6 +1,6 @@
 import logging
 import secrets
-from datetime import timedelta, timezone as dt_timezone
+from datetime import timedelta
 from django.contrib.auth.decorators import login_required
 from django.contrib import messages
 from django.http import JsonResponse, HttpResponseBadRequest
@@ -117,12 +117,7 @@ def youtube_callback(request):
         if refresh_token:
             platform_token.set_refresh_token(refresh_token)
 
-        if expiry:
-            if timezone.is_naive(expiry):
-                expiry = expiry.replace(tzinfo=dt_timezone.utc)
-            platform_token.expires_at = expiry
-        else:
-            platform_token.expires_at = timezone.now() + timedelta(seconds=3600)
+        platform_token.expires_at = expiry or (timezone.now() + timedelta(seconds=3600))
 
         try:
             yt = get_youtube_client(request.user)

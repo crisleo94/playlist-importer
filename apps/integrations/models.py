@@ -47,7 +47,17 @@ class PlatformToken(models.Model):
     def set_refresh_token(self, token: str):
         self.encrypted_refresh_token = encrypt_string(token)
 
+    def save(self, *args, **kwargs):
+        if self.expires_at and timezone.is_naive(self.expires_at):
+            from datetime import timezone as dt_timezone
+            self.expires_at = self.expires_at.replace(tzinfo=dt_timezone.utc)
+        super().save(*args, **kwargs)
+
     def is_expired(self, buffer_seconds: int = 60) -> bool:
         if not self.expires_at:
             return False
-        return timezone.now() >= (self.expires_at - timedelta(seconds=buffer_seconds))
+        expires = self.expires_at
+        if timezone.is_naive(expires):
+            from datetime import timezone as dt_timezone
+            expires = expires.replace(tzinfo=dt_timezone.utc)
+        return timezone.now() >= (expires - timedelta(seconds=buffer_seconds))
