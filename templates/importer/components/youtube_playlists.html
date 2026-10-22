@@ -1,0 +1,87 @@
+{% if not connected %}
+    <div class="text-center py-12 px-4 rounded-xl border border-dashed border-slate-800 bg-slate-950/40">
+        <div class="w-12 h-12 mx-auto rounded-full bg-red-600/10 text-red-500 flex items-center justify-center text-xl mb-3">
+            🔴
+        </div>
+        <h4 class="font-semibold text-sm text-slate-200">YouTube Music no conectado</h4>
+        <p class="text-xs text-slate-400 max-w-sm mx-auto mt-1 mb-4">
+            Conecta tu cuenta para cargar y sincronizar tus listas de YouTube Music.
+        </p>
+        <a href="{% url 'integrations:youtube_connect' %}" class="inline-flex items-center gap-1.5 text-xs bg-red-600 hover:bg-red-500 text-white font-bold px-4 py-2 rounded-lg transition shadow-md shadow-red-600/20">
+            Conectar YouTube
+        </a>
+    </div>
+{% elif error_message %}
+    <div class="p-4 rounded-xl bg-rose-950/40 border border-rose-800/60 text-rose-300 text-xs">
+        <div class="font-semibold mb-1">Error al consultar YouTube:</div>
+        <p class="text-rose-400 mb-3">{{ error_message }}</p>
+        <button hx-get="{% url 'importer:youtube_playlists' %}" hx-target="#youtube-playlists-container" hx-indicator="#youtube-spinner" class="bg-rose-900/60 hover:bg-rose-800 text-white px-3 py-1.5 rounded-lg text-xs font-medium transition">
+            Reintentar
+        </button>
+    </div>
+{% elif playlists %}
+    <div class="space-y-3">
+        <div class="flex items-center justify-between text-xs text-slate-400 px-1">
+            <span>{{ playlists|length }} playlists encontradas</span>
+            <button hx-get="{% url 'importer:youtube_playlists' %}" hx-target="#youtube-playlists-container" hx-indicator="#youtube-spinner" class="hover:text-slate-200 transition text-[11px] flex items-center gap-1">
+                <span>🔄</span> Actualizar
+            </button>
+        </div>
+
+        <div class="space-y-2.5 max-h-[600px] overflow-y-auto pr-1">
+            {% for pl in playlists %}
+                <div class="p-3.5 rounded-xl bg-slate-950/70 border border-slate-800/80 hover:border-red-500/40 transition group flex items-center justify-between gap-3">
+                    <div class="flex items-center gap-3 min-w-0">
+                        {% if pl.image_url %}
+                            <img src="{{ pl.image_url }}" alt="{{ pl.name }}" class="w-12 h-12 rounded-lg object-cover bg-slate-900 flex-shrink-0 border border-slate-800">
+                        {% else %}
+                            <div class="w-12 h-12 rounded-lg bg-red-950/40 border border-red-800/40 flex items-center justify-center text-red-500 flex-shrink-0 text-lg">
+                                🎬
+                            </div>
+                        {% endif %}
+
+                        <div class="min-w-0">
+                            <h4 class="text-sm font-semibold text-slate-100 truncate group-hover:text-red-400 transition" title="{{ pl.name }}">
+                                {{ pl.name }}
+                            </h4>
+                            <div class="flex items-center gap-2 text-[11px] text-slate-400 mt-0.5">
+                                <span class="bg-slate-900 text-slate-300 px-2 py-0.5 rounded border border-slate-800">
+                                    {{ pl.total_tracks }} temas
+                                </span>
+                                <span class="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded {% if pl.privacy_status == 'public' %}bg-emerald-950/50 text-emerald-400 border border-emerald-800/40{% elif pl.privacy_status == 'private' %}bg-amber-950/50 text-amber-400 border border-amber-800/40{% else %}bg-slate-900 text-slate-400 border border-slate-800{% endif %}">
+                                    {{ pl.privacy_status }}
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="flex items-center gap-1.5 flex-shrink-0">
+                        {% if pl.external_url %}
+                            <a href="{{ pl.external_url }}" target="_blank" rel="noopener" class="p-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition text-xs" title="Abrir en YouTube Music">
+                                ↗
+                            </a>
+                        {% endif %}
+
+                        <button hx-get="{% url 'importer:playlist_tracks_modal' platform='youtube' playlist_id=pl.id %}?name={{ pl.name|urlencode }}" hx-target="#modal-container" class="px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white text-xs border border-slate-800 transition">
+                            Ver temas
+                        </button>
+
+                        <button data-playlist-id="{{ pl.id }}" data-playlist-name="{{ pl.name }}" data-source="youtube" data-target="spotify" class="px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-500 text-white font-medium text-xs transition flex items-center gap-1 shadow-sm shadow-red-950">
+                            <span>➔ Spotify</span>
+                        </button>
+                    </div>
+                </div>
+            {% endfor %}
+        </div>
+    </div>
+{% else %}
+    <div class="text-center py-12 px-4 rounded-xl border border-dashed border-slate-800 bg-slate-950/30">
+        <p class="text-xs text-slate-400">
+            {% if query %}
+                No se encontraron playlists que coincidan con "<span class="text-slate-200">{{ query }}</span>".
+            {% else %}
+                No tienes playlists en tu canal de YouTube.
+            {% endif %}
+        </p>
+    </div>
+{% endif %}

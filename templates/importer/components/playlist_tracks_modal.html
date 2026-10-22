@@ -1,0 +1,81 @@
+<div class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm"
+     x-data="{ open: true }"
+     x-show="open"
+     x-transition:enter="transition ease-out duration-200"
+     x-transition:enter-start="opacity-0"
+     x-transition:enter-end="opacity-100"
+     x-transition:leave="transition ease-in duration-150"
+     x-transition:leave-start="opacity-100"
+     x-transition:leave-end="opacity-0">
+
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-2xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden"
+         @click.away="open = false; setTimeout(() => document.getElementById('modal-container').innerHTML = '', 200)">
+
+        <!-- Header -->
+        <div class="p-5 border-b border-slate-800 flex items-center justify-between bg-slate-900/90">
+            <div class="flex items-center gap-3 min-w-0">
+                <span class="text-xl">
+                    {% if platform == 'spotify' %}🟢{% else %}🔴{% endif %}
+                </span>
+                <div class="min-w-0">
+                    <h3 class="font-bold text-base text-slate-100 truncate">{{ playlist_name }}</h3>
+                    <p class="text-xs text-slate-400">
+                        {{ tracks|length }} canciones en {{ platform|title }}
+                    </p>
+                </div>
+            </div>
+
+            <button @click="open = false; setTimeout(() => document.getElementById('modal-container').innerHTML = '', 200)"
+                    class="text-slate-400 hover:text-white p-2 rounded-lg hover:bg-slate-800 transition">
+                ✕
+            </button>
+        </div>
+
+        <!-- Content -->
+        <div class="p-5 overflow-y-auto flex-1 space-y-2">
+            {% if error_message %}
+                <div class="p-4 rounded-xl bg-rose-950/40 border border-rose-800 text-rose-300 text-xs">
+                    {{ error_message }}
+                </div>
+            {% elif tracks %}
+                <div class="divide-y divide-slate-800/60">
+                    {% for track in tracks %}
+                        <div class="py-2.5 flex items-center justify-between gap-3 text-xs">
+                            <div class="flex items-center gap-3 min-w-0">
+                                {% if track.image_url %}
+                                    <img src="{{ track.image_url }}" alt="" class="w-8 h-8 rounded object-cover bg-slate-800 flex-shrink-0">
+                                {% else %}
+                                    <div class="w-8 h-8 rounded bg-slate-800 flex items-center justify-center text-slate-500 flex-shrink-0">
+                                        🎵
+                                    </div>
+                                {% endif %}
+                                <div class="min-w-0">
+                                    <div class="font-medium text-slate-200 truncate">{{ track.title }}</div>
+                                    <div class="text-[11px] text-slate-400 truncate">{{ track.artist }}</div>
+                                </div>
+                            </div>
+
+                            {% if track.isrc %}
+                                <span class="text-[10px] bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded font-mono flex-shrink-0">
+                                    {{ track.isrc }}
+                                </span>
+                            {% endif %}
+                        </div>
+                    {% endfor %}
+                </div>
+            {% else %}
+                <div class="text-center py-10 text-xs text-slate-500">
+                    No se encontraron canciones en esta playlist.
+                </div>
+            {% endif %}
+        </div>
+
+        <!-- Footer -->
+        <div class="p-4 border-t border-slate-800 bg-slate-950/50 flex justify-end">
+            <button @click="open = false; setTimeout(() => document.getElementById('modal-container').innerHTML = '', 200)"
+                    class="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-xs font-medium transition">
+                Cerrar
+            </button>
+        </div>
+    </div>
+</div>

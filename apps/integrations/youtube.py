@@ -117,3 +117,79 @@ def get_youtube_client(user):
     )
 
     return build('youtube', 'v3', credentials=credentials)
+
+
+def get_user_youtube_playlists(user, search_query: str = '') -> list[dict]:
+    yt = get_youtube_client(user)
+    response = yt.playlists().list(
+        part='snippet,contentDetails,status',
+        mine=True,
+        maxResults=50
+    ).execute()
+
+    items = response.get('items', [])
+    playlists = []
+
+    for item in items:
+        snippet = item.get('snippet', {})
+        content_details = item.get('contentDetails', {})
+        status = item.get('status', {})
+
+        title = snippet.get('title') or 'Sin título'
+        if search_query and search_query.lower() not in title.lower():
+            continue
+
+        thumbnails = snippet.get('thumbnails', {})
+        image_url = None
+        for key in ('medium', 'high', 'default'):
+            if key in thumbnails:
+                image_url = thumbnails[key].get('url')
+                break
+
+        playlist_id = item.get('id')
+        playlists.append({
+            'id': playlist_id,
+            'name': title,
+            'description': snippet.get('description') or '',
+            'total_tracks': content_details.get('itemCount', 0),
+            'image_url': image_url,
+            'privacy_status': status.get('privacyStatus', 'public'),
+            'channel_title': snippet.get('channelTitle', ''),
+            'external_url': f"https://music.youtube.com/playlist?list={playlist_id}",
+        })
+
+    return playlists
+
+
+def get_youtube_playlist_tracks(user, playlist_id: str, limit: int = 50) -> list[dict]:
+    yt = get_youtube_client(user)
+    response = yt.playlistItems().list(
+        part='snippet,contentDetails',
+        playlistId=playlist_id,
+        maxResults=min(limit, 50)
+    ).execute()
+
+    items = response.get('items', [])
+    tracks = []
+
+    for item in items:
+        snippet = item.get('snippet', {})
+        title = snippet.get('title')
+        if not title or title == 'Private video' or title == 'Deleted video':
+            continue
+
+        thumbnails = snippet.get('thumbnails', {})
+        image_url = None
+        for key in ('medium', 'high', 'default'):
+            if key in thumbnails:
+                image_url = thumbnails[key].get('url')
+                break
+
+        tracks.append({
+            'id': snippet.get('resourceId', {}).get('videoId'),
+            'title': title,
+            'artist': snippet.get('videoOwnerChannelTitle', 'Artista desconocido'),
+            'image_url': image_url,
+        })
+
+    return tracks
