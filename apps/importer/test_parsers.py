@@ -46,3 +46,19 @@ class PlaylistParserTests(SimpleTestCase):
     def test_youtube_raw_id(self):
         raw_id = 'PLMC9KNkIncKtPzgY-5rmhvj7fax8fdxoj'
         self.assertEqual(parse_playlist_input(raw_id), ('youtube', 'PLMC9KNkIncKtPzgY-5rmhvj7fax8fdxoj'))
+
+    def test_security_domain_spoofing_rejected(self):
+        # Attacker trying to spoof domain via substring
+        spoofed_yt = 'https://music.youtube.com.attacker.net/playlist?list=PLMC9KNkIncKtPzgY-5rmhvj7fax8fdxoj'
+        self.assertIsNone(parse_playlist_input(spoofed_yt))
+
+        spoofed_sp = 'https://open.spotify.com.attacker.net/playlist/37i9dQZF1DXcBWIGoYBM5M'
+        self.assertIsNone(parse_playlist_input(spoofed_sp))
+
+    def test_security_youtube_invalid_or_malicious_id_rejected(self):
+        # Malicious payload in list parameter on legitimate YouTube domain
+        xss_url = 'https://www.youtube.com/playlist?list=<script>alert(1)</script>'
+        self.assertIsNone(parse_playlist_input(xss_url))
+
+        invalid_id_url = 'https://music.youtube.com/playlist?list=invalid-random-id-123'
+        self.assertIsNone(parse_playlist_input(invalid_id_url))

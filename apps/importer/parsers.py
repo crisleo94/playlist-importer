@@ -5,6 +5,14 @@ SPOTIFY_ID_REGEX = re.compile(r'^[a-zA-Z0-9]{22}$')
 YOUTUBE_ID_REGEX = re.compile(r'^(PL|UU|LL|FL|RD|OLAK)[a-zA-Z0-9_-]{10,}$')
 
 
+def _is_spotify_host(hostname: str) -> bool:
+    return hostname == 'spotify.com' or hostname.endswith('.spotify.com')
+
+
+def _is_youtube_host(hostname: str) -> bool:
+    return hostname == 'youtube.com' or hostname.endswith('.youtube.com') or hostname == 'youtu.be'
+
+
 def parse_playlist_input(raw_input: str) -> tuple[str, str] | None:
     if not raw_input or not isinstance(raw_input, str):
         return None
@@ -27,7 +35,7 @@ def parse_playlist_input(raw_input: str) -> tuple[str, str] | None:
             hostname = (parsed.hostname or '').lower()
 
             # Spotify
-            if 'spotify.com' in hostname:
+            if _is_spotify_host(hostname):
                 parts = [p for p in parsed.path.split('/') if p]
                 if len(parts) >= 2 and parts[0] == 'playlist':
                     playlist_id = parts[1].split('?')[0].strip()
@@ -35,12 +43,12 @@ def parse_playlist_input(raw_input: str) -> tuple[str, str] | None:
                         return 'spotify', playlist_id
 
             # YouTube / YouTube Music
-            if any(yt_domain in hostname for yt_domain in ('youtube.com', 'youtu.be')):
+            if _is_youtube_host(hostname):
                 query_params = parse_qs(parsed.query)
                 list_ids = query_params.get('list', [])
                 if list_ids:
                     playlist_id = list_ids[0].strip()
-                    if playlist_id:
+                    if YOUTUBE_ID_REGEX.match(playlist_id):
                         return 'youtube', playlist_id
         except Exception:
             pass
