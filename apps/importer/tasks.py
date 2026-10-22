@@ -24,6 +24,14 @@ from apps.integrations.youtube import (
 
 logger = logging.getLogger(__name__)
 
+# Tope de pistas leídas de la playlist origen por job. Antes de TASK-010
+# (reanudación barata vía historial + cache compartido) 200 ya era
+# optimista para completarse en un solo día según la dirección; ahora que
+# una importación cortada por cuota se puede continuar sin reprocesar lo ya
+# hecho (AC-1/AC-4), subirlo solo agrega margen -- el corte temprano por
+# cuota sigue aplicando igual si se llega a necesitar.
+MAX_TRACKS_PER_JOB = 500
+
 
 @shared_task(bind=True, time_limit=900, soft_time_limit=840)
 def run_playlist_import(self, job_id: int):
@@ -44,9 +52,9 @@ def run_playlist_import(self, job_id: int):
     try:
         # 1. Obtener canciones de la lista origen
         if job.source_platform == ImportJob.PLATFORM_SPOTIFY:
-            source_tracks = get_spotify_playlist_tracks(job.user, job.source_playlist_id, limit=200)
+            source_tracks = get_spotify_playlist_tracks(job.user, job.source_playlist_id, limit=MAX_TRACKS_PER_JOB)
         elif job.source_platform == ImportJob.PLATFORM_YOUTUBE:
-            source_tracks = get_youtube_playlist_tracks(job.user, job.source_playlist_id, limit=200)
+            source_tracks = get_youtube_playlist_tracks(job.user, job.source_playlist_id, limit=MAX_TRACKS_PER_JOB)
         else:
             raise ValueError(f"Plataforma origen inválida: {job.source_platform}")
 
@@ -82,9 +90,37 @@ def run_playlist_import(self, job_id: int):
         spotify_uri_batch = []
         pending_spotify_items = []
 
+        # Pistas ya agregadas a este mismo destino en un job anterior (reanudación):
+        # se evita volver a buscarlas e insertarlas, sin gastar cuota de ninguna API.
+        already_added_source_ids = set(
+            ImportJobItem.objects.filter(
+                job__user=job.user,
+                job__source_platform=job.source_platform,
+                job__target_platform=job.target_platform,
+                job__target_playlist_id=job.target_playlist_id,
+                status=ImportJobItem.STATUS_ADDED,
+            ).exclude(job=job).exclude(source_track_id='').values_list('source_track_id', flat=True)
+        )
+
         for track in source_tracks:
             track_title = track.get('title', 'Canción sin título')
             track_artist = track.get('artist', '')
+            track_id = track.get('id', '')
+
+            if track_id and track_id in already_added_source_ids:
+                ImportJobItem.objects.create(
+                    job=job,
+                    source_track_id=track_id,
+                    source_title=track_title,
+                    source_artist=track_artist,
+                    source_isrc=track.get('isrc', ''),
+                    status=ImportJobItem.STATUS_ADDED,
+                )
+                job.successful_tracks += 1
+                job.processed_tracks += 1
+                job.save(update_fields=['processed_tracks', 'successful_tracks', 'failed_tracks', 'updated_at'])
+                continue
+
             job.current_track_name = track_title
             job.save(update_fields=['current_track_name', 'updated_at'])
 
@@ -101,7 +137,7 @@ def run_playlist_import(self, job_id: int):
                     job.error_message = f"Límite de cuota o peticiones de {target_name} alcanzado. Se detuvo la transferencia para proteger la cuenta."
                     item = ImportJobItem.objects.create(
                         job=job,
-                        source_track_id=track.get('id', ''),
+                        source_track_id=track_id,
                         source_title=track_title,
                         source_artist=track_artist,
                         source_isrc=track.get('isrc', ''),
@@ -120,7 +156,7 @@ def run_playlist_import(self, job_id: int):
             if matched:
                 item = ImportJobItem.objects.create(
                     job=job,
-                    source_track_id=track.get('id', ''),
+                    source_track_id=track_id,
                     source_title=track_title,
                     source_artist=track_artist,
                     source_isrc=track.get('isrc', ''),
@@ -199,7 +235,7 @@ def run_playlist_import(self, job_id: int):
             else:
                 ImportJobItem.objects.create(
                     job=job,
-                    source_track_id=track.get('id', ''),
+                    source_track_id=track_id,
                     source_title=track_title,
                     source_artist=track_artist,
                     source_isrc=track.get('isrc', ''),

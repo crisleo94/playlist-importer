@@ -1,4 +1,5 @@
 import logging
+from contextlib import contextmanager
 from django.contrib.auth.decorators import login_required
 from django.core.cache import cache
 from django.shortcuts import get_object_or_404, render
@@ -22,6 +23,52 @@ from apps.importer.parsers import parse_playlist_input
 logger = logging.getLogger(__name__)
 
 CACHE_TTL_PLAYLISTS = 120
+
+
+def _suggest_matching_playlist_id(source_name: str, target_playlists: list[dict]) -> str:
+    """Devuelve el id de la playlist destino cuyo nombre coincide (case-insensitive,
+    sin espacios en los extremos) con el nombre de la playlist origen, o '' si ninguna
+    coincide. Es solo una sugerencia preseleccionada en la UI -- nunca decide por sí
+    sola el destino, el usuario siempre confirma o cambia la selección antes de
+    transferir."""
+    normalized_source = (source_name or '').strip().lower()
+    if not normalized_source:
+        return ''
+    for playlist in target_playlists:
+        if (playlist.get('name') or '').strip().lower() == normalized_source:
+            return playlist.get('id', '')
+    return ''
+
+
+@contextmanager
+def _import_job_lock(lock_key: str, timeout: int = 10):
+    """Lock atómico (cache.add solo tiene éxito si la clave no existe
+    todavía) para cerrar la ventana entre "chequear si ya hay un job activo
+    para esta transferencia" y "crear uno nuevo": sin esto, dos requests
+    realmente concurrentes podrían pasar el chequeo antes de que cualquiera
+    de las dos cree su ImportJob, encolando dos tareas Celery duplicadas
+    para lo mismo. Da `True` si esta llamada tomó el lock, `False` si otra
+    request ya lo tiene -- en ese caso el lock no se borra, porque no es
+    nuestro para borrar."""
+    acquired = cache.add(lock_key, "1", timeout=timeout)
+    try:
+        yield acquired
+    finally:
+        if acquired:
+            cache.delete(lock_key)
+
+
+def _find_active_job(user, source_platform, source_playlist_id, target_platform, target_playlist_id=None):
+    filters = dict(
+        user=user,
+        source_platform=source_platform,
+        source_playlist_id=source_playlist_id,
+        target_platform=target_platform,
+        status__in=[ImportJob.STATUS_PENDING, ImportJob.STATUS_PROCESSING],
+    )
+    if target_playlist_id is not None:
+        filters['target_playlist_id'] = target_playlist_id
+    return ImportJob.objects.filter(**filters).first()
 
 
 @login_required
@@ -209,6 +256,7 @@ def preview_match_view(request, source_platform, playlist_id):
             logger.warning("Error al generar vista previa de emparejamiento %s -> %s: %s", source_platform, target_platform, e)
             error_message = "No se pudo generar la vista previa de coincidencia. Por favor, intenta de nuevo."
 
+    suggested_target_playlist_id = _suggest_matching_playlist_id(playlist_name, target_playlists)
     return render(request, 'importer/components/preview_match_modal.html', {
         'source_platform': source_platform,
         'target_platform': target_platform,
@@ -216,6 +264,8 @@ def preview_match_view(request, source_platform, playlist_id):
         'playlist_name': playlist_name,
         'preview': preview_data,
         'target_playlists': target_playlists,
+        'suggested_target_playlist_id': suggested_target_playlist_id,
+        'default_selected_playlist_id': suggested_target_playlist_id or (target_playlists[0]['id'] if target_playlists else ''),
         'error_message': error_message,
     })
 
@@ -303,6 +353,7 @@ def import_by_url_view(request):
         logger.warning("Error al previsualizar playlist por URL %s (%s): %s", source_platform, playlist_id, e)
         error_message = "No se pudo leer la playlist. Verifica que sea pública o colaborativa y que tu cuenta tenga acceso a ella."
 
+    suggested_target_playlist_id = _suggest_matching_playlist_id(playlist_name, target_playlists)
     return render(request, 'importer/components/preview_match_modal.html', {
         'source_platform': source_platform,
         'target_platform': target_platform,
@@ -310,6 +361,8 @@ def import_by_url_view(request):
         'playlist_name': playlist_name,
         'preview': preview_data,
         'target_playlists': target_playlists,
+        'suggested_target_playlist_id': suggested_target_playlist_id,
+        'default_selected_playlist_id': suggested_target_playlist_id or (target_playlists[0]['id'] if target_playlists else ''),
         'error_message': error_message,
     })
 
@@ -337,38 +390,46 @@ def start_import_view(request):
             'error_message': f"Debes conectar tu cuenta de {target_name} antes de iniciar la importación.",
         })
 
-    # Prevención de doble-submit o jobs concurrentes duplicados para la misma lista
-    existing_job = ImportJob.objects.filter(
-        user=request.user,
-        source_platform=source_platform,
-        source_playlist_id=source_playlist_id,
-        target_platform=target_platform,
-        status__in=[ImportJob.STATUS_PENDING, ImportJob.STATUS_PROCESSING]
-    ).first()
-    if existing_job:
+    # Lock atómico: ver _import_job_lock. Cierra la ventana entre "chequear
+    # si ya hay un job activo para esta lista" y "crear uno nuevo" para que
+    # dos requests concurrentes no encolen dos tareas Celery duplicadas.
+    lock_key = f"start_import_lock:{request.user.id}:{source_platform}:{source_playlist_id}:{target_platform}"
+    with _import_job_lock(lock_key) as acquired:
+        if not acquired:
+            existing_job = _find_active_job(request.user, source_platform, source_playlist_id, target_platform)
+            if existing_job:
+                return render(request, 'importer/components/import_progress.html', {
+                    'job': existing_job,
+                })
+            return render(request, 'importer/components/import_progress.html', {
+                'error_message': 'Ya se está iniciando una importación para esta playlist. Intenta de nuevo en un momento.',
+            })
+
+        existing_job = _find_active_job(request.user, source_platform, source_playlist_id, target_platform)
+        if existing_job:
+            return render(request, 'importer/components/import_progress.html', {
+                'job': existing_job,
+            })
+
+        job = ImportJob.objects.create(
+            user=request.user,
+            source_platform=source_platform,
+            target_platform=target_platform,
+            source_playlist_id=source_playlist_id,
+            source_playlist_name=source_playlist_name,
+            destination_mode=dest_mode,
+            target_playlist_id=selected_playlist_id if dest_mode == ImportJob.DEST_MODE_EXISTING else '',
+            target_playlist_name=new_playlist_name if dest_mode == ImportJob.DEST_MODE_NEW else '',
+            status=ImportJob.STATUS_PENDING,
+        )
+
+        task = run_playlist_import.delay(job.id)
+        job.celery_task_id = task.id or ''
+        job.save(update_fields=['celery_task_id'])
+
         return render(request, 'importer/components/import_progress.html', {
-            'job': existing_job,
+            'job': job,
         })
-
-    job = ImportJob.objects.create(
-        user=request.user,
-        source_platform=source_platform,
-        target_platform=target_platform,
-        source_playlist_id=source_playlist_id,
-        source_playlist_name=source_playlist_name,
-        destination_mode=dest_mode,
-        target_playlist_id=selected_playlist_id if dest_mode == ImportJob.DEST_MODE_EXISTING else '',
-        target_playlist_name=new_playlist_name if dest_mode == ImportJob.DEST_MODE_NEW else '',
-        status=ImportJob.STATUS_PENDING,
-    )
-
-    task = run_playlist_import.delay(job.id)
-    job.celery_task_id = task.id or ''
-    job.save(update_fields=['celery_task_id'])
-
-    return render(request, 'importer/components/import_progress.html', {
-        'job': job,
-    })
 
 
 @login_required
@@ -382,3 +443,65 @@ def import_progress_view(request, job_id):
         'job': job,
         'unmatched_items': unmatched_items,
     })
+
+
+@login_required
+@require_POST
+def resume_import_view(request, job_id):
+    original_job = get_object_or_404(ImportJob, id=job_id, user=request.user)
+
+    if not original_job.is_finished or original_job.status == ImportJob.STATUS_COMPLETED:
+        return render(request, 'importer/components/import_progress.html', {
+            'job': original_job,
+        })
+
+    if not original_job.target_playlist_id:
+        return render(request, 'importer/components/import_progress.html', {
+            'job': original_job,
+            'error_message': 'No se puede continuar: esta importación no llegó a registrar una playlist de destino.',
+        })
+
+    lock_key = (
+        f"resume_import_lock:{request.user.id}:{original_job.source_platform}:"
+        f"{original_job.source_playlist_id}:{original_job.target_platform}:"
+        f"{original_job.target_playlist_id}"
+    )
+    with _import_job_lock(lock_key) as acquired:
+        if not acquired:
+            existing_job = _find_active_job(
+                request.user, original_job.source_platform, original_job.source_playlist_id,
+                original_job.target_platform, original_job.target_playlist_id,
+            )
+            return render(request, 'importer/components/import_progress.html', {
+                'job': existing_job or original_job,
+            })
+
+        existing_job = _find_active_job(
+            request.user, original_job.source_platform, original_job.source_playlist_id,
+            original_job.target_platform, original_job.target_playlist_id,
+        )
+        if existing_job:
+            return render(request, 'importer/components/import_progress.html', {
+                'job': existing_job,
+            })
+
+        resume_job = ImportJob.objects.create(
+            user=request.user,
+            source_platform=original_job.source_platform,
+            target_platform=original_job.target_platform,
+            source_playlist_id=original_job.source_playlist_id,
+            source_playlist_name=original_job.source_playlist_name,
+            destination_mode=ImportJob.DEST_MODE_EXISTING,
+            target_playlist_id=original_job.target_playlist_id,
+            target_playlist_name=original_job.target_playlist_name,
+            resumed_from=original_job,
+            status=ImportJob.STATUS_PENDING,
+        )
+
+        task = run_playlist_import.delay(resume_job.id)
+        resume_job.celery_task_id = task.id or ''
+        resume_job.save(update_fields=['celery_task_id'])
+
+        return render(request, 'importer/components/import_progress.html', {
+            'job': resume_job,
+        })

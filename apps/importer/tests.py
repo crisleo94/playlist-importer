@@ -560,6 +560,75 @@ class PreviewMatchModalViewTests(TestCase):
         self.assertContains(response, "No se pudo generar la vista previa de coincidencia")
         self.assertNotContains(response, "Internal RateLimit 429")
 
+    @patch('apps.importer.views.get_user_youtube_playlists')
+    @patch('apps.importer.views.preview_playlist_match')
+    def test_preview_suggests_existing_playlist_matching_by_name(self, mock_preview, mock_get_target_playlists):
+        # TASK-010 AC-3: a destination playlist whose name matches the source
+        # (case-insensitive, trimmed) is preselected in the UI, without
+        # auto-confirming anything -- the user still has to submit the form.
+        self.client.login(username="modal_user", password="password123")
+        token = PlatformToken.objects.create(user=self.user, platform=PlatformToken.PLATFORM_YOUTUBE)
+        token.set_access_token("valid_token")
+        token.save()
+
+        mock_preview.return_value = {
+            'source_platform': 'spotify', 'target_platform': 'youtube', 'playlist_id': 'sp_1',
+            'total_tracks': 1, 'matched_count': 1, 'unmatched_count': 0, 'match_rate': 100.0, 'items': [],
+        }
+        mock_get_target_playlists.return_value = [
+            {'id': 'yt_unrelated', 'name': 'Some Other List'},
+            {'id': 'yt_match', 'name': '  road trip 2026  '},
+        ]
+
+        url = reverse('importer:preview_match', kwargs={'source_platform': 'spotify', 'playlist_id': 'sp_1'})
+        response = self.client.get(f"{url}?name=Road+Trip+2026")
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "selectedPlaylistId: 'yt_match'")
+        self.assertContains(response, "destinationMode: 'existing'")
+        self.assertContains(response, "Sugerido")
+
+    @patch('apps.importer.views.get_user_youtube_playlists')
+    @patch('apps.importer.views.preview_playlist_match')
+    def test_preview_no_suggestion_when_no_name_matches(self, mock_preview, mock_get_target_playlists):
+        self.client.login(username="modal_user", password="password123")
+        token = PlatformToken.objects.create(user=self.user, platform=PlatformToken.PLATFORM_YOUTUBE)
+        token.set_access_token("valid_token")
+        token.save()
+
+        mock_preview.return_value = {
+            'source_platform': 'spotify', 'target_platform': 'youtube', 'playlist_id': 'sp_1',
+            'total_tracks': 1, 'matched_count': 1, 'unmatched_count': 0, 'match_rate': 100.0, 'items': [],
+        }
+        mock_get_target_playlists.return_value = [{'id': 'yt_unrelated', 'name': 'Some Other List'}]
+
+        url = reverse('importer:preview_match', kwargs={'source_platform': 'spotify', 'playlist_id': 'sp_1'})
+        response = self.client.get(f"{url}?name=Road+Trip+2026")
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "destinationMode: 'new'")
+        self.assertNotContains(response, "Sugerido")
+
+
+class SuggestMatchingPlaylistTests(TestCase):
+    def test_exact_match(self):
+        from apps.importer.views import _suggest_matching_playlist_id
+        playlists = [{'id': 'a', 'name': 'Road Trip 2026'}]
+        self.assertEqual(_suggest_matching_playlist_id('Road Trip 2026', playlists), 'a')
+
+    def test_case_and_whitespace_insensitive(self):
+        from apps.importer.views import _suggest_matching_playlist_id
+        playlists = [{'id': 'a', 'name': '  road trip 2026  '}]
+        self.assertEqual(_suggest_matching_playlist_id('ROAD TRIP 2026', playlists), 'a')
+
+    def test_no_match_returns_empty(self):
+        from apps.importer.views import _suggest_matching_playlist_id
+        playlists = [{'id': 'a', 'name': 'Completely Different'}]
+        self.assertEqual(_suggest_matching_playlist_id('Road Trip 2026', playlists), '')
+
+    def test_empty_inputs_return_empty(self):
+        from apps.importer.views import _suggest_matching_playlist_id
+        self.assertEqual(_suggest_matching_playlist_id('', [{'id': 'a', 'name': 'Anything'}]), '')
+        self.assertEqual(_suggest_matching_playlist_id('Road Trip 2026', []), '')
+
 
 from apps.importer.models import ImportJob, ImportJobItem
 from apps.importer.tasks import run_playlist_import
@@ -689,6 +758,31 @@ class CeleryImportTaskTests(TestCase):
         job.refresh_from_db()
         self.assertEqual(job.status, ImportJob.STATUS_COMPLETED)
 
+    @patch('apps.importer.tasks.get_youtube_playlist_tracks')
+    @patch('apps.importer.tasks.get_spotify_playlist_tracks')
+    def test_run_playlist_import_fetches_up_to_max_tracks_per_job(self, mock_get_sp_tracks, mock_get_yt_tracks):
+        # TASK-010 AC-5: the per-job track fetch cap was raised from 200 to
+        # MAX_TRACKS_PER_JOB now that a cut-off job can be resumed cheaply
+        # (AC-1/AC-4) instead of reprocessing everything from scratch.
+        from apps.importer.tasks import MAX_TRACKS_PER_JOB
+        self.assertEqual(MAX_TRACKS_PER_JOB, 500)
+
+        mock_get_sp_tracks.return_value = []
+        job_sp_src = ImportJob.objects.create(
+            user=self.user, source_platform='spotify', target_platform='youtube',
+            source_playlist_id='sp_1', source_playlist_name='List', status=ImportJob.STATUS_PENDING,
+        )
+        run_playlist_import(job_sp_src.id)
+        mock_get_sp_tracks.assert_called_once_with(self.user, 'sp_1', limit=MAX_TRACKS_PER_JOB)
+
+        mock_get_yt_tracks.return_value = []
+        job_yt_src = ImportJob.objects.create(
+            user=self.user, source_platform='youtube', target_platform='spotify',
+            source_playlist_id='yt_1', source_playlist_name='List', status=ImportJob.STATUS_PENDING,
+        )
+        run_playlist_import(job_yt_src.id)
+        mock_get_yt_tracks.assert_called_once_with(self.user, 'yt_1', limit=MAX_TRACKS_PER_JOB)
+
     @patch('apps.importer.tasks.add_video_to_youtube_playlist')
     @patch('apps.importer.tasks.create_youtube_playlist')
     @patch('apps.importer.tasks.match_spotify_track_to_youtube')
@@ -817,6 +911,161 @@ class CeleryImportTaskTests(TestCase):
         # (no track sent twice).
         self.assertTrue(all(size <= 25 for size in batch_sizes), batch_sizes)
         self.assertEqual(sum(batch_sizes), num_tracks)
+
+    @patch('apps.importer.tasks.add_tracks_to_spotify_playlist')
+    @patch('apps.importer.tasks.match_youtube_track_to_spotify')
+    @patch('apps.importer.tasks.get_youtube_playlist_tracks')
+    @patch('apps.importer.tasks.get_spotify_client')
+    def test_run_playlist_import_resumes_without_reprocessing_already_added_tracks(
+        self, mock_sp_client, mock_get_tracks, mock_match, mock_add_tracks
+    ):
+        # TASK-010 AC-1/AC-6: a track already ADDED to this exact destination
+        # in a previous job must be skipped entirely on a later run against
+        # the same destination -- no match call, no insert call, no double
+        # counting -- and still show up correctly in this job's own history.
+        target_playlist_id = 'sp_existing_resume_target'
+
+        previous_job = ImportJob.objects.create(
+            user=self.user,
+            source_platform='youtube',
+            target_platform='spotify',
+            source_playlist_id='yt_src',
+            source_playlist_name='Big List',
+            destination_mode='existing',
+            target_playlist_id=target_playlist_id,
+            status=ImportJob.STATUS_PARTIAL,
+        )
+        ImportJobItem.objects.create(
+            job=previous_job,
+            source_track_id='v1',
+            source_title='Already Added One',
+            source_artist='Artist',
+            target_track_id='sp_trk_1',
+            target_track_uri='spotify:track:sp_trk_1',
+            status=ImportJobItem.STATUS_ADDED,
+        )
+        ImportJobItem.objects.create(
+            job=previous_job,
+            source_track_id='v2',
+            source_title='Already Added Two',
+            source_artist='Artist',
+            target_track_id='sp_trk_2',
+            target_track_uri='spotify:track:sp_trk_2',
+            status=ImportJobItem.STATUS_ADDED,
+        )
+
+        mock_get_tracks.return_value = [
+            {'id': 'v1', 'title': 'Already Added One', 'artist': 'Artist'},
+            {'id': 'v2', 'title': 'Already Added Two', 'artist': 'Artist'},
+            {'id': 'v3', 'title': 'New Song', 'artist': 'Artist'},
+        ]
+
+        def fail_if_already_added(user, track, sp_client=None):
+            if track['id'] in ('v1', 'v2'):
+                raise AssertionError(f"match_youtube_track_to_spotify called for already-added track {track['id']!r}")
+            return {'id': 'sp_trk_3', 'uri': 'spotify:track:sp_trk_3', 'title': 'New Song', 'artist': 'Artist', 'score': 0.9}
+
+        mock_match.side_effect = fail_if_already_added
+
+        resume_job = ImportJob.objects.create(
+            user=self.user,
+            source_platform='youtube',
+            target_platform='spotify',
+            source_playlist_id='yt_src',
+            source_playlist_name='Big List',
+            destination_mode='existing',
+            target_playlist_id=target_playlist_id,
+            status=ImportJob.STATUS_PENDING,
+        )
+
+        run_playlist_import(resume_job.id)
+        resume_job.refresh_from_db()
+
+        self.assertEqual(resume_job.status, ImportJob.STATUS_COMPLETED)
+        self.assertEqual(resume_job.total_tracks, 3)
+        self.assertEqual(resume_job.successful_tracks, 3)
+        self.assertEqual(resume_job.failed_tracks, 0)
+        self.assertEqual(resume_job.items.count(), 3)
+
+        # Only the genuinely new track reached the matcher.
+        self.assertEqual(mock_match.call_count, 1)
+
+        skipped_items = resume_job.items.filter(source_track_id__in=['v1', 'v2'])
+        self.assertEqual(skipped_items.count(), 2)
+        self.assertTrue(all(item.status == ImportJobItem.STATUS_ADDED for item in skipped_items))
+
+    @patch('apps.importer.tasks.add_video_to_youtube_playlist')
+    @patch('apps.importer.tasks.create_youtube_playlist')
+    @patch('apps.importer.tasks.get_youtube_client')
+    @patch('apps.importer.tasks.get_spotify_playlist_tracks')
+    def test_matcher_cache_survives_across_separate_job_runs_on_resume(
+        self, mock_get_tracks, mock_yt_client, mock_create_yt, mock_add_video
+    ):
+        # TASK-010 AC-4: a track whose search already got resolved and cached
+        # in a previous job run must not search again in a later job against
+        # the same destination -- even when it wasn't skipped by the AC-1
+        # already-added check, because its insert failed the first time
+        # (so its status isn't ADDED, and AC-1 alone wouldn't save the call).
+        mock_get_tracks.return_value = [
+            {'id': 'trk_1', 'title': 'Song One', 'artist': 'Artist', 'isrc': 'ISRC001'},
+        ]
+        mock_create_yt.return_value = {'id': 'yt_dest', 'name': 'Dest'}
+
+        search_execute = MagicMock(return_value={
+            'items': [{
+                'id': {'videoId': 'vid_1'},
+                'snippet': {'title': 'Artist - Song One', 'channelTitle': 'Artist', 'description': ''},
+            }]
+        })
+        mock_yt = MagicMock()
+        mock_yt.search.return_value.list.return_value.execute = search_execute
+        mock_yt_client.return_value = mock_yt
+
+        # Job 1: the track matches fine, but the insert fails with a quota
+        # error -- so the item never reaches status=ADDED.
+        mock_add_video.side_effect = Exception('quotaExceeded: Daily limit exceeded')
+
+        job1 = ImportJob.objects.create(
+            user=self.user,
+            source_platform='spotify',
+            target_platform='youtube',
+            source_playlist_id='sp_src',
+            source_playlist_name='List',
+            destination_mode='new',
+            status=ImportJob.STATUS_PENDING,
+        )
+        run_playlist_import(job1.id)
+        job1.refresh_from_db()
+
+        self.assertEqual(job1.items.first().status, ImportJobItem.STATUS_FAILED)
+        self.assertEqual(search_execute.call_count, 1)
+
+        # Job 2 ("resume"): same destination, same track, insert succeeds
+        # this time. AC-1 does NOT skip this track (it was never ADDED),
+        # so match_spotify_track_to_youtube runs again for real -- the only
+        # thing that can save the API call here is matcher.py's own cache.
+        mock_add_video.side_effect = None
+        mock_add_video.return_value = {'id': 'item_created'}
+
+        job2 = ImportJob.objects.create(
+            user=self.user,
+            source_platform='spotify',
+            target_platform='youtube',
+            source_playlist_id='sp_src',
+            source_playlist_name='List',
+            destination_mode='existing',
+            target_playlist_id=job1.target_playlist_id,
+            resumed_from=job1,
+            status=ImportJob.STATUS_PENDING,
+        )
+        run_playlist_import(job2.id)
+        job2.refresh_from_db()
+
+        self.assertEqual(job2.successful_tracks, 1)
+        self.assertEqual(job2.items.first().status, ImportJobItem.STATUS_ADDED)
+        # The search was never repeated: the cached result from job1 served
+        # job2 without a second call to the YouTube search API.
+        self.assertEqual(search_execute.call_count, 1)
 
     @patch('apps.importer.tasks.get_spotify_playlist_tracks')
     def test_run_playlist_import_soft_time_limit_exceeded(self, mock_get_tracks):
@@ -987,6 +1236,64 @@ class ImportViewsTests(TestCase):
         self.assertContains(response, "Underground Band")
         self.assertContains(response, "Sin coincidencia")
 
+    def test_import_progress_view_completed_job_hides_resume_button(self):
+        # Regression for the review gap found on TASK-010: forcing the
+        # template's resume-button condition to always-true left every
+        # existing test green, because none of them asserted this at all.
+        self.client.login(username="view_user", password="password123")
+        job = ImportJob.objects.create(
+            user=self.user,
+            source_platform='spotify',
+            target_platform='youtube',
+            source_playlist_id='sp_1',
+            source_playlist_name='Finished Playlist',
+            target_playlist_id='yt_dest_1',
+            total_tracks=15,
+            processed_tracks=15,
+            successful_tracks=15,
+            status=ImportJob.STATUS_COMPLETED,
+        )
+        url = reverse('importer:import_progress', kwargs={'job_id': job.id})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "Continuar importación")
+
+    def test_import_progress_view_partial_with_destination_shows_resume_button(self):
+        self.client.login(username="view_user", password="password123")
+        job = ImportJob.objects.create(
+            user=self.user,
+            source_platform='youtube',
+            target_platform='spotify',
+            source_playlist_id='yt_1',
+            source_playlist_name='Partial Playlist',
+            target_playlist_id='sp_dest_1',
+            total_tracks=10,
+            successful_tracks=8,
+            failed_tracks=2,
+            status=ImportJob.STATUS_PARTIAL,
+        )
+        url = reverse('importer:import_progress', kwargs={'job_id': job.id})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Continuar importación")
+
+    def test_import_progress_view_failed_without_destination_hides_resume_button(self):
+        # A job that failed before ever resolving a target_playlist_id has
+        # nothing to resume into -- the button must not appear.
+        self.client.login(username="view_user", password="password123")
+        job = ImportJob.objects.create(
+            user=self.user,
+            source_platform='spotify',
+            target_platform='youtube',
+            source_playlist_id='sp_1',
+            source_playlist_name='Never Got Started',
+            target_playlist_id='',
+            status=ImportJob.STATUS_FAILED,
+        )
+        url = reverse('importer:import_progress', kwargs={'job_id': job.id})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "Continuar importación")
 
     @patch('apps.importer.views.run_playlist_import.delay')
     def test_start_import_double_submit_prevents_duplicate_job_and_task(self, mock_delay):
@@ -1019,6 +1326,38 @@ class ImportViewsTests(TestCase):
         # Only 1 job created and 1 Celery task enqueued
         self.assertEqual(ImportJob.objects.filter(user=self.user, source_playlist_id='sp_dup_1').count(), 1)
         self.assertEqual(mock_delay.call_count, 1)
+
+    @patch('apps.importer.views.run_playlist_import.delay')
+    def test_start_import_lock_prevents_race_when_held_by_another_request(self, mock_delay):
+        # Same closing of the TOCTOU gap as resume_import_view, verified
+        # the same way: pre-acquire the exact lock key the view would try
+        # to take -- simulating a genuinely concurrent request rather than
+        # a sequential double-submit -- and confirm this request backs off
+        # with a clear message instead of racing past the check-then-create
+        # window and enqueueing a second Celery task for the same transfer.
+        self.client.login(username="view_user", password="password123")
+        token = PlatformToken.objects.create(user=self.user, platform=PlatformToken.PLATFORM_YOUTUBE)
+        token.set_access_token("valid_token")
+        token.save()
+
+        lock_key = f"start_import_lock:{self.user.id}:spotify:sp_race_1:youtube"
+        cache.set(lock_key, "1", timeout=10)
+        try:
+            url = reverse('importer:start_import')
+            response = self.client.post(url, {
+                'source_platform': 'spotify',
+                'source_playlist_id': 'sp_race_1',
+                'source_playlist_name': 'Race List',
+                'dest_mode': 'new',
+                'new_playlist_name': 'Race List (YT)',
+            })
+
+            self.assertEqual(response.status_code, 200)
+            mock_delay.assert_not_called()
+            self.assertEqual(ImportJob.objects.filter(user=self.user, source_playlist_id='sp_race_1').count(), 0)
+            self.assertContains(response, "Intenta de nuevo en un momento")
+        finally:
+            cache.delete(lock_key)
 
     def test_import_progress_view_cross_user_forbidden(self):
         attacker = User.objects.create_user(username="attacker", password="password123")
@@ -1064,6 +1403,175 @@ class ImportViewsTests(TestCase):
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Fallo de inserción")
+
+    def test_resume_import_requires_login(self):
+        job = ImportJob.objects.create(
+            user=self.user,
+            source_platform='youtube',
+            target_platform='spotify',
+            source_playlist_id='yt_1',
+            source_playlist_name='List',
+            target_playlist_id='sp_dest',
+            status=ImportJob.STATUS_PARTIAL,
+        )
+        url = reverse('importer:resume_import', kwargs={'job_id': job.id})
+        response = self.client.post(url)
+        self.assertEqual(response.status_code, 302)
+
+    def test_resume_import_requires_post(self):
+        self.client.login(username="view_user", password="password123")
+        job = ImportJob.objects.create(
+            user=self.user,
+            source_platform='youtube',
+            target_platform='spotify',
+            source_playlist_id='yt_1',
+            source_playlist_name='List',
+            target_playlist_id='sp_dest',
+            status=ImportJob.STATUS_PARTIAL,
+        )
+        url = reverse('importer:resume_import', kwargs={'job_id': job.id})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 405)
+
+    def test_resume_import_cross_user_forbidden(self):
+        other_user = User.objects.create_user(username="other_resume_user", password="password123")
+        job = ImportJob.objects.create(
+            user=other_user,
+            source_platform='youtube',
+            target_platform='spotify',
+            source_playlist_id='yt_1',
+            source_playlist_name='List',
+            target_playlist_id='sp_dest',
+            status=ImportJob.STATUS_PARTIAL,
+        )
+        self.client.login(username="view_user", password="password123")
+        url = reverse('importer:resume_import', kwargs={'job_id': job.id})
+        response = self.client.post(url)
+        self.assertEqual(response.status_code, 404)
+
+    def test_resume_import_completed_job_does_not_create_new_job(self):
+        self.client.login(username="view_user", password="password123")
+        job = ImportJob.objects.create(
+            user=self.user,
+            source_platform='youtube',
+            target_platform='spotify',
+            source_playlist_id='yt_1',
+            source_playlist_name='List',
+            target_playlist_id='sp_dest',
+            total_tracks=10,
+            successful_tracks=10,
+            status=ImportJob.STATUS_COMPLETED,
+        )
+        url = reverse('importer:resume_import', kwargs={'job_id': job.id})
+        response = self.client.post(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(ImportJob.objects.filter(user=self.user).count(), 1)
+
+    def test_resume_import_without_target_playlist_id_shows_error(self):
+        self.client.login(username="view_user", password="password123")
+        job = ImportJob.objects.create(
+            user=self.user,
+            source_platform='youtube',
+            target_platform='spotify',
+            source_playlist_id='yt_1',
+            source_playlist_name='List',
+            target_playlist_id='',
+            status=ImportJob.STATUS_FAILED,
+        )
+        url = reverse('importer:resume_import', kwargs={'job_id': job.id})
+        response = self.client.post(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "no llegó a registrar una playlist de destino")
+        self.assertEqual(ImportJob.objects.filter(user=self.user).count(), 1)
+
+    @patch('apps.importer.views.run_playlist_import.delay')
+    def test_resume_import_partial_creates_chained_job(self, mock_delay):
+        self.client.login(username="view_user", password="password123")
+        mock_delay.return_value = MagicMock(id='resume_task_uuid')
+
+        original_job = ImportJob.objects.create(
+            user=self.user,
+            source_platform='youtube',
+            target_platform='spotify',
+            source_playlist_id='yt_src',
+            source_playlist_name='Big List',
+            destination_mode='new',
+            target_playlist_id='sp_dest_created',
+            target_playlist_name='Big List (Imported)',
+            total_tracks=300,
+            successful_tracks=100,
+            failed_tracks=1,
+            status=ImportJob.STATUS_PARTIAL,
+        )
+
+        url = reverse('importer:resume_import', kwargs={'job_id': original_job.id})
+        response = self.client.post(url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Continuación")
+
+        resume_job = ImportJob.objects.filter(user=self.user).exclude(id=original_job.id).first()
+        self.assertIsNotNone(resume_job)
+        self.assertEqual(resume_job.resumed_from_id, original_job.id)
+        self.assertEqual(resume_job.destination_mode, ImportJob.DEST_MODE_EXISTING)
+        self.assertEqual(resume_job.target_playlist_id, 'sp_dest_created')
+        self.assertEqual(resume_job.source_playlist_id, 'yt_src')
+        mock_delay.assert_called_once_with(resume_job.id)
+
+    @patch('apps.importer.views.run_playlist_import.delay')
+    def test_resume_import_prevents_duplicate_concurrent_resume(self, mock_delay):
+        self.client.login(username="view_user", password="password123")
+        mock_delay.return_value = MagicMock(id='resume_task_uuid')
+
+        original_job = ImportJob.objects.create(
+            user=self.user,
+            source_platform='youtube',
+            target_platform='spotify',
+            source_playlist_id='yt_src',
+            source_playlist_name='Big List',
+            target_playlist_id='sp_dest_created',
+            status=ImportJob.STATUS_PARTIAL,
+        )
+
+        url = reverse('importer:resume_import', kwargs={'job_id': original_job.id})
+        self.client.post(url)
+        self.assertEqual(mock_delay.call_count, 1)
+
+        # Resuming again before the first resume job finishes must not create a second one
+        self.client.post(url)
+        self.assertEqual(mock_delay.call_count, 1)
+        self.assertEqual(ImportJob.objects.filter(user=self.user).count(), 2)
+
+    @patch('apps.importer.views.run_playlist_import.delay')
+    def test_resume_import_lock_prevents_race_when_held_by_another_request(self, mock_delay):
+        # Unlike test_resume_import_prevents_duplicate_concurrent_resume
+        # (two sequential POSTs through the full view), this simulates true
+        # overlap: pre-acquire the exact lock key the view itself would try
+        # to take, as if another in-flight request already holds it, and
+        # confirm this request backs off instead of racing past the
+        # check-then-create window and creating a duplicate ImportJob /
+        # Celery task for the same destination.
+        self.client.login(username="view_user", password="password123")
+        original_job = ImportJob.objects.create(
+            user=self.user,
+            source_platform='youtube',
+            target_platform='spotify',
+            source_playlist_id='yt_src',
+            source_playlist_name='Big List',
+            target_playlist_id='sp_dest_created',
+            status=ImportJob.STATUS_PARTIAL,
+        )
+        lock_key = f"resume_import_lock:{self.user.id}:youtube:yt_src:spotify:sp_dest_created"
+        cache.set(lock_key, "1", timeout=10)
+        try:
+            url = reverse('importer:resume_import', kwargs={'job_id': original_job.id})
+            response = self.client.post(url)
+
+            self.assertEqual(response.status_code, 200)
+            mock_delay.assert_not_called()
+            self.assertEqual(ImportJob.objects.filter(user=self.user).count(), 1)
+        finally:
+            cache.delete(lock_key)
 
 
 class ImportByUrlTests(TestCase):
