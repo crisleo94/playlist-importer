@@ -1120,3 +1120,162 @@ class ImportByUrlTests(TestCase):
         self.assertContains(response, "Collab YT Party")
         self.assertContains(response, "Video B")
         self.assertContains(response, "Iniciar Transferencia")
+
+
+class QuotaAndRateLimitTests(TestCase):
+    def setUp(self):
+        cache.clear()
+        self.user = User.objects.create_user(username="quota_user", password="password123")
+        token_sp = PlatformToken.objects.create(
+            user=self.user,
+            platform=PlatformToken.PLATFORM_SPOTIFY,
+            platform_username="spot_user"
+        )
+        token_sp.set_access_token("valid_sp_token")
+        token_sp.save()
+
+        token_yt = PlatformToken.objects.create(
+            user=self.user,
+            platform=PlatformToken.PLATFORM_YOUTUBE,
+            platform_username="yt_user"
+        )
+        token_yt.set_access_token("valid_yt_token")
+        token_yt.save()
+
+    def tearDown(self):
+        cache.clear()
+
+    def test_is_quota_or_rate_limit_error_detection(self):
+        from apps.importer.matcher import is_quota_or_rate_limit_error, QuotaOrRateLimitExceeded
+
+        # 1. Custom QuotaOrRateLimitExceeded
+        self.assertTrue(is_quota_or_rate_limit_error(QuotaOrRateLimitExceeded('spotify', '429 error')))
+
+        # 2. SpotifyException structured attribute http_status=429
+        mock_spotipy_exc = Exception("Rate limit reached")
+        mock_spotipy_exc.http_status = 429
+        self.assertTrue(is_quota_or_rate_limit_error(mock_spotipy_exc))
+
+        # 3. Google HttpError structured attribute resp.status=403 with quota reason
+        mock_resp = MagicMock(status=403)
+        mock_google_exc = Exception("<HttpError 403: 'quotaExceeded'>")
+        mock_google_exc.resp = mock_resp
+        self.assertTrue(is_quota_or_rate_limit_error(mock_google_exc))
+
+        # 4. Text fallback
+        self.assertTrue(is_quota_or_rate_limit_error(Exception("user_rate_limit_exceeded")))
+        self.assertTrue(is_quota_or_rate_limit_error(Exception("Error 429: Too Many Requests")))
+
+        # 5. Normal exception should return False
+        self.assertFalse(is_quota_or_rate_limit_error(ValueError("Invalid track name")))
+        self.assertFalse(is_quota_or_rate_limit_error(KeyError("missing key")))
+
+    @patch('apps.importer.matcher.get_spotify_client')
+    def test_match_youtube_track_raises_quota_on_429(self, mock_sp_client):
+        from apps.importer.matcher import match_youtube_track_to_spotify, QuotaOrRateLimitExceeded
+
+        mock_sp = MagicMock()
+        mock_exc = Exception("Spotify rate limit")
+        mock_exc.http_status = 429
+        mock_sp.search.side_effect = mock_exc
+        mock_sp_client.return_value = mock_sp
+
+        track = {'title': 'Song A', 'artist': 'Artist A'}
+        with self.assertRaises(QuotaOrRateLimitExceeded):
+            match_youtube_track_to_spotify(self.user, track, sp_client=mock_sp)
+
+    @patch('apps.importer.matcher.get_youtube_client')
+    def test_match_spotify_track_raises_quota_on_quota_exceeded(self, mock_yt_client):
+        from apps.importer.matcher import match_spotify_track_to_youtube, QuotaOrRateLimitExceeded
+
+        mock_yt = MagicMock()
+        mock_exc = Exception("The request cannot be completed because quotaExceeded has occurred.")
+        mock_exc.resp = MagicMock(status=403)
+        mock_yt.search().list().execute.side_effect = mock_exc
+        mock_yt_client.return_value = mock_yt
+
+        track = {'title': 'Song B', 'artist': 'Artist B'}
+        with self.assertRaises(QuotaOrRateLimitExceeded):
+            match_spotify_track_to_youtube(self.user, track, yt_client=mock_yt)
+
+    @patch('apps.importer.tasks.get_spotify_client')
+    @patch('apps.importer.tasks.create_spotify_playlist')
+    @patch('apps.importer.tasks.get_youtube_playlist_tracks')
+    @patch('apps.importer.tasks.match_youtube_track_to_spotify')
+    def test_run_playlist_import_search_quota_exceeded_aborts_early(self, mock_match, mock_get_tracks, mock_create_pl, mock_get_client):
+        mock_create_pl.return_value = {'id': 'created_sp_id', 'name': 'SP List'}
+        from apps.importer.tasks import run_playlist_import
+        from apps.importer.matcher import QuotaOrRateLimitExceeded
+
+        # 5 tracks in source playlist
+        mock_get_tracks.return_value = [
+            {'id': f't_{i}', 'title': f'Song {i}', 'artist': f'Artist {i}'}
+            for i in range(5)
+        ]
+
+        # First track throws QuotaOrRateLimitExceeded
+        mock_match.side_effect = QuotaOrRateLimitExceeded('spotify', 'Spotify rate limit 429')
+
+        job = ImportJob.objects.create(
+            user=self.user,
+            source_platform=ImportJob.PLATFORM_YOUTUBE,
+            target_platform=ImportJob.PLATFORM_SPOTIFY,
+            source_playlist_id='yt_list_123',
+            source_playlist_name='YT Big List',
+            status=ImportJob.STATUS_PENDING,
+        )
+
+        run_playlist_import(job.id)
+        job.refresh_from_db()
+
+        # Crucial: Must stop after 1 track, NOT burn all 5 tracks!
+        self.assertEqual(job.processed_tracks, 1)
+        self.assertEqual(job.successful_tracks, 0)
+        self.assertEqual(job.failed_tracks, 1)
+        self.assertIn("Límite de cuota", job.error_message)
+        self.assertEqual(job.status, ImportJob.STATUS_FAILED)
+
+        item = job.items.first()
+        self.assertIsNotNone(item)
+        self.assertTrue(item.is_quota_error)
+        self.assertIn("Límite de cuota", item.error_message)
+
+    @patch('apps.importer.tasks.get_youtube_client')
+    @patch('apps.importer.tasks.create_youtube_playlist')
+    @patch('apps.importer.tasks.get_spotify_playlist_tracks')
+    @patch('apps.importer.tasks.match_spotify_track_to_youtube')
+    @patch('apps.importer.tasks.add_video_to_youtube_playlist')
+    def test_run_playlist_import_insert_quota_exceeded_aborts_early(self, mock_add_video, mock_match, mock_get_tracks, mock_create_pl, mock_get_client):
+        mock_create_pl.return_value = {'id': 'created_yt_id', 'name': 'YT List'}
+        from apps.importer.tasks import run_playlist_import
+
+        mock_get_tracks.return_value = [
+            {'id': f'sp_{i}', 'title': f'Song {i}', 'artist': f'Artist {i}'}
+            for i in range(4)
+        ]
+        mock_match.return_value = {'id': 'yt_vid_1', 'title': 'Matched Title', 'artist': 'Artist'}
+
+        mock_exc = Exception("quotaExceeded: Daily limit exceeded")
+        mock_exc.resp = MagicMock(status=403)
+        mock_add_video.side_effect = mock_exc
+
+        job = ImportJob.objects.create(
+            user=self.user,
+            source_platform=ImportJob.PLATFORM_SPOTIFY,
+            target_platform=ImportJob.PLATFORM_YOUTUBE,
+            source_playlist_id='sp_list_123',
+            source_playlist_name='SP List',
+            status=ImportJob.STATUS_PENDING,
+        )
+
+        run_playlist_import(job.id)
+        job.refresh_from_db()
+
+        self.assertEqual(job.processed_tracks, 1)
+        self.assertEqual(job.successful_tracks, 0)
+        self.assertEqual(job.failed_tracks, 1)
+        self.assertIn("Límite de cuota", job.error_message)
+
+        item = job.items.first()
+        self.assertIsNotNone(item)
+        self.assertTrue(item.is_quota_error)

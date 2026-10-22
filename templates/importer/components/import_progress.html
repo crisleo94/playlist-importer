@@ -147,7 +147,7 @@
                                                 <div class="font-medium text-slate-200 truncate">{{ item.source_title }}</div>
                                                 <div class="text-[10px] text-slate-400 truncate">{{ item.source_artist }}</div>
                                             </div>
-                                            {% if 'cuota' in item.error_message.lower or '429' in item.error_message %}
+                                            {% if item.is_quota_error or 'cuota' in item.error_message.lower or '429' in item.error_message %}
                                                 <span class="text-[10px] text-amber-400 bg-amber-950/40 px-2 py-0.5 rounded border border-amber-900/50" title="{{ item.error_message }}">
                                                     Cuota alcanzada
                                                 </span>

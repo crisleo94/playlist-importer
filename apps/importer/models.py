@@ -113,6 +113,7 @@ class ImportJobItem(models.Model):
         default=STATUS_PENDING
     )
     error_message = models.TextField(blank=True, default='')
+    is_quota_error = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

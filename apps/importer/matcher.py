@@ -8,6 +8,43 @@ from apps.integrations.youtube import get_youtube_client, get_youtube_playlist_t
 
 logger = logging.getLogger(__name__)
 
+
+class QuotaOrRateLimitExceeded(Exception):
+    def __init__(self, platform: str, message: str, original_exception: Exception | None = None):
+        super().__init__(message)
+        self.platform = platform
+        self.original_exception = original_exception
+
+
+def is_quota_or_rate_limit_error(exc: Exception) -> bool:
+    if isinstance(exc, QuotaOrRateLimitExceeded):
+        return True
+
+    # 1. Structured attributes
+    http_status = getattr(exc, 'http_status', None)
+    if http_status in (403, 429):
+        if http_status == 429:
+            return True
+        err_str = str(exc).lower()
+        if any(k in err_str for k in ('quota', 'ratelimit', 'rate_limit', 'limit_exceeded')):
+            return True
+
+    resp = getattr(exc, 'resp', None)
+    status = getattr(resp, 'status', None)
+    if status in (403, 429):
+        err_str = str(exc).lower()
+        if any(k in err_str for k in ('quotaexceeded', 'ratelimit', 'user_rate_limit_exceeded', 'daily_limit_exceeded')):
+            return True
+        if status == 429:
+            return True
+
+    # 2. String-matching fallback
+    err_str = str(exc).lower()
+    return any(k in err_str for k in (
+        'quotaexceeded', 'rate_limit', 'ratelimit', '429', 'user_rate_limit_exceeded', 'too many requests'
+    ))
+
+
 MIN_SCORE_YOUTUBE_MATCH = 0.55
 MIN_SCORE_SPOTIFY_MATCH = 0.50
 KARAOKE_PENALTY_FACTOR = 0.50
@@ -117,6 +154,8 @@ def match_spotify_track_to_youtube(user, track: dict, yt_client=None) -> dict | 
                 'match_type': 'isrc' if is_isrc_match else 'fuzzy',
             })
     except Exception as e:
+        if is_quota_or_rate_limit_error(e):
+            raise QuotaOrRateLimitExceeded('youtube', 'Límite de cuota diaria de YouTube alcanzado', original_exception=e)
         logger.warning("Error en búsqueda de YouTube para '%s': %s", query, e)
 
     best_match = None
@@ -175,6 +214,8 @@ def match_youtube_track_to_spotify(user, track: dict, sp_client=None) -> dict | 
             res = sp.search(q=query, type='track', limit=5)
             items = res.get('tracks', {}).get('items', [])
         except Exception as e:
+            if is_quota_or_rate_limit_error(e):
+                raise QuotaOrRateLimitExceeded('spotify', 'Límite de peticiones de Spotify alcanzado (HTTP 429)', original_exception=e)
             logger.warning("Error en búsqueda dirigida de Spotify para '%s': %s", query, e)
 
     # Strategy 2: Broad query fallback
@@ -183,6 +224,8 @@ def match_youtube_track_to_spotify(user, track: dict, sp_client=None) -> dict | 
             res = sp.search(q=query_phrase, type='track', limit=5)
             items = res.get('tracks', {}).get('items', [])
         except Exception as e:
+            if is_quota_or_rate_limit_error(e):
+                raise QuotaOrRateLimitExceeded('spotify', 'Límite de peticiones de Spotify alcanzado (HTTP 429)', original_exception=e)
             logger.warning("Error en búsqueda amplia de Spotify para '%s': %s", query_phrase, e)
 
     best_match = None
