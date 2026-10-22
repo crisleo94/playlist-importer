@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="es" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Playlist Importer{% endblock %}</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            spotify: '#1DB954',
+                            youtube: '#FF0000',
+                            dark: '#0F172A',
+                            card: '#1E293B',
+                            border: '#334155'
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <!-- HTMX -->
+    <script src="https://unpkg.com/htmx.org@2.0.3"></script>
+    <!-- Alpine.js -->
+    <script defer src="https://unpkg.com/alpinejs@3.14.3/dist/cdn.min.js"></script>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col font-sans">
+    <header class="border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
+            <a href="{% url 'importer:dashboard' %}" class="flex items-center gap-3 text-lg font-bold tracking-tight">
+                <span class="flex items-center justify-center w-9 h-9 rounded-lg bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                    🎵
+                </span>
+                <span>Playlist<span class="text-emerald-400">Importer</span></span>
+            </a>
+
+            <div class="flex items-center gap-4">
+                {% if user.is_authenticated %}
+                    <span class="text-sm text-slate-400">Hola, <strong class="text-slate-200">{{ user.username }}</strong></span>
+                    <a href="{% url 'accounts:logout' %}" class="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-lg border border-slate-700 transition">
+                        Cerrar sesión
+                    </a>
+                {% else %}
+                    <a href="{% url 'accounts:login' %}" class="text-sm text-slate-300 hover:text-white px-3 py-1.5 transition">Iniciar sesión</a>
+                    <a href="{% url 'accounts:register' %}" class="text-sm bg-emerald-600 hover:bg-emerald-500 text-white font-medium px-3.5 py-1.5 rounded-lg transition">Registrarse</a>
+                {% endif %}
+            </div>
+        </div>
+    </header>
+
+    <main class="flex-1 max-w-7xl w-full mx-auto px-4 py-6">
+        {% if messages %}
+            <div class="mb-6 space-y-2">
+                {% for message in messages %}
+                    <div class="p-3.5 rounded-lg text-sm flex items-center justify-between {% if message.tags == 'error' %}bg-rose-950/70 border border-rose-800/80 text-rose-200{% elif message.tags == 'success' %}bg-emerald-950/70 border border-emerald-800/80 text-emerald-200{% else %}bg-sky-950/70 border border-sky-800/80 text-sky-200{% endif %}">
+                        <span>{{ message }}</span>
+                        <button onclick="this.parentElement.remove()" class="text-slate-400 hover:text-white ml-2">&times;</button>
+                    </div>
+                {% endfor %}
+            </div>
+        {% endif %}
+
+        {% block content %}{% endblock %}
+    </main>
+
+    <footer class="border-t border-slate-900 bg-slate-950/80 py-4 text-center text-xs text-slate-500">
+        Playlist Importer &copy; 2026 — Sincronización entre Spotify y YouTube Music
+    </footer>
+</body>
+</html>
