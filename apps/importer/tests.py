@@ -818,6 +818,88 @@ class CeleryImportTaskTests(TestCase):
         self.assertTrue(all(size <= 25 for size in batch_sizes), batch_sizes)
         self.assertEqual(sum(batch_sizes), num_tracks)
 
+    @patch('apps.importer.tasks.add_tracks_to_spotify_playlist')
+    @patch('apps.importer.tasks.match_youtube_track_to_spotify')
+    @patch('apps.importer.tasks.get_youtube_playlist_tracks')
+    @patch('apps.importer.tasks.get_spotify_client')
+    def test_run_playlist_import_resumes_without_reprocessing_already_added_tracks(
+        self, mock_sp_client, mock_get_tracks, mock_match, mock_add_tracks
+    ):
+        # TASK-010 AC-1/AC-6: a track already ADDED to this exact destination
+        # in a previous job must be skipped entirely on a later run against
+        # the same destination -- no match call, no insert call, no double
+        # counting -- and still show up correctly in this job's own history.
+        target_playlist_id = 'sp_existing_resume_target'
+
+        previous_job = ImportJob.objects.create(
+            user=self.user,
+            source_platform='youtube',
+            target_platform='spotify',
+            source_playlist_id='yt_src',
+            source_playlist_name='Big List',
+            destination_mode='existing',
+            target_playlist_id=target_playlist_id,
+            status=ImportJob.STATUS_PARTIAL,
+        )
+        ImportJobItem.objects.create(
+            job=previous_job,
+            source_track_id='v1',
+            source_title='Already Added One',
+            source_artist='Artist',
+            target_track_id='sp_trk_1',
+            target_track_uri='spotify:track:sp_trk_1',
+            status=ImportJobItem.STATUS_ADDED,
+        )
+        ImportJobItem.objects.create(
+            job=previous_job,
+            source_track_id='v2',
+            source_title='Already Added Two',
+            source_artist='Artist',
+            target_track_id='sp_trk_2',
+            target_track_uri='spotify:track:sp_trk_2',
+            status=ImportJobItem.STATUS_ADDED,
+        )
+
+        mock_get_tracks.return_value = [
+            {'id': 'v1', 'title': 'Already Added One', 'artist': 'Artist'},
+            {'id': 'v2', 'title': 'Already Added Two', 'artist': 'Artist'},
+            {'id': 'v3', 'title': 'New Song', 'artist': 'Artist'},
+        ]
+
+        def fail_if_already_added(user, track, sp_client=None):
+            if track['id'] in ('v1', 'v2'):
+                raise AssertionError(f"match_youtube_track_to_spotify called for already-added track {track['id']!r}")
+            return {'id': 'sp_trk_3', 'uri': 'spotify:track:sp_trk_3', 'title': 'New Song', 'artist': 'Artist', 'score': 0.9}
+
+        mock_match.side_effect = fail_if_already_added
+
+        resume_job = ImportJob.objects.create(
+            user=self.user,
+            source_platform='youtube',
+            target_platform='spotify',
+            source_playlist_id='yt_src',
+            source_playlist_name='Big List',
+            destination_mode='existing',
+            target_playlist_id=target_playlist_id,
+            status=ImportJob.STATUS_PENDING,
+        )
+
+        run_playlist_import(resume_job.id)
+        resume_job.refresh_from_db()
+
+        self.assertEqual(resume_job.status, ImportJob.STATUS_COMPLETED)
+        self.assertEqual(resume_job.total_tracks, 3)
+        self.assertEqual(resume_job.successful_tracks, 3)
+        self.assertEqual(resume_job.failed_tracks, 0)
+        self.assertEqual(resume_job.items.count(), 3)
+
+        # Only the genuinely new track reached the matcher.
+        self.assertEqual(mock_match.call_count, 1)
+
+        skipped_items = resume_job.items.filter(source_track_id__in=['v1', 'v2'])
+        self.assertEqual(skipped_items.count(), 2)
+        self.assertTrue(all(item.status == ImportJobItem.STATUS_ADDED for item in skipped_items))
+
     @patch('apps.importer.tasks.get_spotify_playlist_tracks')
     def test_run_playlist_import_soft_time_limit_exceeded(self, mock_get_tracks):
         from celery.exceptions import SoftTimeLimitExceeded
