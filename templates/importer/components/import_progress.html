@@ -1,0 +1,188 @@
+<div class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm"
+     id="import-progress-container"
+     x-data="{ open: true }"
+     x-show="open"
+     {% if job and not job.is_finished %}
+         hx-get="{% url 'importer:import_progress' job_id=job.id %}"
+         hx-trigger="every 1.5s"
+         hx-target="#modal-container"
+     {% endif %}>
+
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-2xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden"
+         @click.away="open = false; setTimeout(() => document.getElementById('modal-container').innerHTML = '', 200)">
+
+        <!-- Header -->
+        <div class="p-5 border-b border-slate-800 flex items-center justify-between bg-slate-900/90">
+            <div>
+                <div class="flex items-center gap-2">
+                    <span class="text-xs font-semibold uppercase tracking-wider text-slate-400">Progreso de Importación</span>
+                    {% if job %}
+                        <span class="text-xs bg-slate-800 text-slate-300 px-2 py-0.5 rounded-full border border-slate-700">
+                            {{ job.source_platform|title }} ➔ {{ job.target_platform|title }}
+                        </span>
+                    {% endif %}
+                </div>
+                <h3 class="font-bold text-lg text-slate-100 mt-0.5 truncate max-w-md">
+                    {{ job.source_playlist_name|default:"Transferencia" }}
+                </h3>
+            </div>
+
+            <button @click="open = false; setTimeout(() => document.getElementById('modal-container').innerHTML = '', 200)"
+                    class="text-slate-400 hover:text-white p-2 rounded-lg hover:bg-slate-800 transition"
+                    title="Cerrar modal">
+                ✕
+            </button>
+        </div>
+
+        <!-- Body -->
+        <div class="p-6 overflow-y-auto flex-1 space-y-5">
+            {% if error_message %}
+                <div class="p-4 rounded-xl bg-rose-950/40 border border-rose-800 text-rose-300 text-xs">
+                    {{ error_message }}
+                </div>
+            {% elif job %}
+                {% if not job.is_finished %}
+                    <!-- Estado En Progreso -->
+                    <div class="space-y-4">
+                        <div class="flex items-center justify-between text-xs">
+                            <span class="text-slate-300 font-medium flex items-center gap-2">
+                                <span class="animate-spin text-emerald-400 text-sm">⟳</span>
+                                Transfiriendo canciones...
+                            </span>
+                            <span class="text-emerald-400 font-bold text-sm">{{ job.progress_percentage }}%</span>
+                        </div>
+
+                        <!-- Barra de progreso -->
+                        <div class="w-full bg-slate-950 rounded-full h-3 overflow-hidden border border-slate-800">
+                            <div class="bg-gradient-to-r from-emerald-500 to-teal-400 h-3 rounded-full transition-all duration-300"
+                                 style="width: {{ job.progress_percentage }}%"></div>
+                        </div>
+
+                        {% if job.current_track_name %}
+                            <div class="text-[11px] text-slate-400 flex items-center gap-1.5 truncate">
+                                <span class="text-slate-500 font-mono">Procesando:</span>
+                                <span class="text-slate-200 font-medium truncate">{{ job.current_track_name }}</span>
+                            </div>
+                        {% endif %}
+
+                        <!-- Tarjetas de métricas intermedias -->
+                        <div class="grid grid-cols-3 gap-3 p-3.5 rounded-xl bg-slate-950/60 border border-slate-800 text-center">
+                            <div>
+                                <div class="text-[10px] text-slate-400">Procesadas</div>
+                                <div class="text-sm font-bold text-slate-200">{{ job.processed_tracks }} / {{ job.total_tracks }}</div>
+                            </div>
+                            <div>
+                                <div class="text-[10px] text-slate-400">Transferidas</div>
+                                <div class="text-sm font-bold text-emerald-400">{{ job.successful_tracks }}</div>
+                            </div>
+                            <div>
+                                <div class="text-[10px] text-slate-400">Omitidas / Fallidas</div>
+                                <div class="text-sm font-bold text-amber-400">{{ job.failed_tracks }}</div>
+                            </div>
+                        </div>
+
+                        <div class="text-center text-[11px] text-slate-500">
+                            Puedes cerrar este modal en cualquier momento; la sincronización continuará en segundo plano.
+                        </div>
+                    </div>
+                {% else %}
+                    <!-- Estado Finalizado -->
+                    <div class="space-y-4">
+                        {% if job.status == 'completed' %}
+                            <div class="p-4 rounded-xl bg-emerald-950/40 border border-emerald-800/80 text-emerald-300 text-xs flex items-center gap-3">
+                                <div class="text-2xl">✓</div>
+                                <div>
+                                    <div class="font-bold text-sm text-emerald-200">¡Importación Completada con Éxito!</div>
+                                    <div class="text-[11px] text-emerald-400 mt-0.5">Todas las canciones fueron emparejadas y añadidas a tu lista de destino.</div>
+                                </div>
+                            </div>
+                        {% elif job.status == 'partial' %}
+                            <div class="p-4 rounded-xl bg-amber-950/40 border border-amber-800/80 text-amber-300 text-xs flex items-center gap-3">
+                                <div class="text-2xl">⚠</div>
+                                <div>
+                                    <div class="font-bold text-sm text-amber-200">Importación Parcialmente Completada</div>
+                                    <div class="text-[11px] text-amber-400 mt-0.5">Se transfirieron {{ job.successful_tracks }} de {{ job.total_tracks }} canciones. Las pistas no encontradas o fallidas figuran debajo.</div>
+                                </div>
+                            </div>
+                        {% else %}
+                            <div class="p-4 rounded-xl bg-rose-950/40 border border-rose-800/80 text-rose-300 text-xs flex items-center gap-3">
+                                <div class="text-2xl">✕</div>
+                                <div>
+                                    <div class="font-bold text-sm text-rose-200">Falló la Importación</div>
+                                    <div class="text-[11px] text-rose-400 mt-0.5">{{ job.error_message|default:"No se pudieron transferir las canciones." }}</div>
+                                </div>
+                            </div>
+                        {% endif %}
+
+                        <!-- Resumen estadístico -->
+                        <div class="grid grid-cols-3 gap-3 p-3.5 rounded-xl bg-slate-950/60 border border-slate-800 text-center">
+                            <div>
+                                <div class="text-[10px] text-slate-400">Total</div>
+                                <div class="text-sm font-bold text-slate-200">{{ job.total_tracks }}</div>
+                            </div>
+                            <div>
+                                <div class="text-[10px] text-slate-400">Transferidas</div>
+                                <div class="text-sm font-bold text-emerald-400">{{ job.successful_tracks }}</div>
+                            </div>
+                            <div>
+                                <div class="text-[10px] text-slate-400">Omitidas / Fallidas</div>
+                                <div class="text-sm font-bold text-rose-400">{{ job.failed_tracks }}</div>
+                            </div>
+                        </div>
+
+                        <!-- Lista de no encontradas / fallidas si las hay -->
+                        {% if unmatched_items %}
+                            <div class="space-y-2 pt-2">
+                                <div class="text-xs font-bold text-slate-300">Pistas omitidas o fallidas:</div>
+                                <div class="border border-slate-800/80 rounded-xl divide-y divide-slate-800/60 overflow-hidden bg-slate-950/40 max-h-48 overflow-y-auto">
+                                    {% for item in unmatched_items %}
+                                        <div class="p-2.5 text-xs flex items-center justify-between gap-2">
+                                            <div class="min-w-0">
+                                                <div class="font-medium text-slate-200 truncate">{{ item.source_title }}</div>
+                                                <div class="text-[10px] text-slate-400 truncate">{{ item.source_artist }}</div>
+                                            </div>
+                                            {% if item.status == 'failed' %}
+                                                <span class="text-[10px] text-rose-400 bg-rose-950/40 px-2 py-0.5 rounded border border-rose-900/50" title="{{ item.error_message }}">
+                                                    Fallo de inserción
+                                                </span>
+                                            {% else %}
+                                                <span class="text-[10px] text-amber-400 bg-amber-950/40 px-2 py-0.5 rounded border border-amber-900/50">
+                                                    Sin coincidencia
+                                                </span>
+                                            {% endif %}
+                                        </div>
+                                    {% endfor %}
+                                </div>
+                            </div>
+                        {% endif %}
+                    </div>
+                {% endif %}
+            {% endif %}
+        </div>
+
+        <!-- Footer -->
+        <div class="p-4 border-t border-slate-800 bg-slate-950/60 flex items-center justify-between">
+            {% if job and job.is_finished %}
+                <div></div>
+                <button @click="open = false; setTimeout(() => { document.getElementById('modal-container').innerHTML = ''; window.location.reload(); }, 200)"
+                        class="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition">
+                    Aceptar y Actualizar
+                </button>
+            {% elif error_message %}
+                <div></div>
+                <button @click="open = false; setTimeout(() => document.getElementById('modal-container').innerHTML = '', 200)"
+                        class="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium transition">
+                    Cerrar
+                </button>
+            {% else %}
+                <div class="text-[11px] text-slate-400 flex items-center gap-2">
+                    <span>Celery Worker en curso</span>
+                </div>
+                <button @click="open = false; setTimeout(() => document.getElementById('modal-container').innerHTML = '', 200)"
+                        class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium transition">
+                    Ocultar modal
+                </button>
+            {% endif %}
+        </div>
+    </div>
+</div>

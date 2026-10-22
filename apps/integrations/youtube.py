@@ -217,3 +217,36 @@ def get_youtube_playlist_tracks(user, playlist_id: str, limit: int = 100) -> lis
             break
 
     return tracks
+
+
+def create_youtube_playlist(user, name: str, description: str = '', privacy_status: str = 'private', yt_client=None) -> dict:
+    yt = yt_client if yt_client is not None else get_youtube_client(user)
+    body = {
+        'snippet': {
+            'title': name,
+            'description': description or 'Imported via Playlist Importer',
+        },
+        'status': {
+            'privacyStatus': privacy_status,
+        }
+    }
+    response = yt.playlists().insert(part='snippet,status', body=body).execute()
+    return {
+        'id': response['id'],
+        'name': response.get('snippet', {}).get('title', name),
+        'external_url': f"https://music.youtube.com/playlist?list={response['id']}",
+    }
+
+
+def add_video_to_youtube_playlist(user, playlist_id: str, video_id: str, yt_client=None) -> dict:
+    yt = yt_client if yt_client is not None else get_youtube_client(user)
+    body = {
+        'snippet': {
+            'playlistId': playlist_id,
+            'resourceId': {
+                'kind': 'youtube#video',
+                'videoId': video_id,
+            }
+        }
+    }
+    return yt.playlistItems().insert(part='snippet', body=body).execute()
