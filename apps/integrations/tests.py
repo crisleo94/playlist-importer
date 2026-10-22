@@ -8,6 +8,8 @@ from django.urls import reverse
 from django.utils import timezone
 from apps.core.crypto import encrypt_string, decrypt_string, _get_fernet
 from apps.integrations.models import PlatformToken
+from apps.integrations.spotify import resolve_redirect_uri as resolve_spotify_uri
+from apps.integrations.youtube import resolve_redirect_uri as resolve_youtube_uri
 
 User = get_user_model()
 
@@ -69,6 +71,16 @@ class IntegrationsViewTests(TestCase):
     def setUp(self):
         self.client = Client()
         self.user = User.objects.create_user(username="testuser", password="password123")
+
+    def test_resolve_redirect_uri_preserves_host_or_adapts(self):
+        self.assertEqual(
+            resolve_spotify_uri('http://localhost:8000/integrations/spotify/callback/', '127.0.0.1:8000'),
+            'http://127.0.0.1:8000/integrations/spotify/callback/'
+        )
+        self.assertEqual(
+            resolve_youtube_uri('http://localhost:8000/integrations/youtube/callback/', None),
+            'http://localhost:8000/integrations/youtube/callback/'
+        )
 
     def test_connection_status_requires_login(self):
         response = self.client.get(reverse('integrations:status'))
@@ -167,6 +179,13 @@ class IntegrationsViewTests(TestCase):
         self.assertEqual(token.platform_username, 'SpotifyTester')
         self.assertFalse(token.is_expired())
 
+    def test_youtube_connect_stores_pkce_verifier(self):
+        self.client.login(username="testuser", password="password123")
+        with patch('apps.integrations.views.get_youtube_auth_url', return_value=('https://accounts.google.com/auth', 'mock_verifier_xyz')):
+            response = self.client.get(reverse('integrations:youtube_connect'))
+            self.assertEqual(response.status_code, 302)
+            self.assertEqual(self.client.session.get('youtube_code_verifier'), 'mock_verifier_xyz')
+
     def test_youtube_callback_invalid_state(self):
         self.client.login(username="testuser", password="password123")
         session = self.client.session
@@ -191,6 +210,7 @@ class IntegrationsViewTests(TestCase):
         self.client.login(username="testuser", password="password123")
         session = self.client.session
         session['youtube_oauth_state'] = 'valid_state'
+        session['youtube_code_verifier'] = 'saved_pkce_verifier'
         session.save()
 
         # Simulate google-auth returning naive datetime in UTC
@@ -210,6 +230,10 @@ class IntegrationsViewTests(TestCase):
 
         response = self.client.get(reverse('integrations:youtube_callback'), {'state': 'valid_state', 'code': 'auth_code'})
         self.assertRedirects(response, reverse('importer:dashboard'))
+
+        mock_exchange.assert_called_once()
+        _, kwargs = mock_exchange.call_args
+        self.assertEqual(kwargs.get('code_verifier'), 'saved_pkce_verifier')
 
         token = PlatformToken.objects.get(user=self.user, platform=PlatformToken.PLATFORM_YOUTUBE)
         self.assertEqual(token.get_access_token(), 'test_yt_access')

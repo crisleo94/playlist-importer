@@ -1,4 +1,5 @@
 from datetime import timedelta
+from urllib.parse import urlparse
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 from django.conf import settings
@@ -13,24 +14,32 @@ SPOTIFY_SCOPES = [
 ]
 
 
-def get_spotify_oauth(state: str = None) -> SpotifyOAuth:
+def resolve_redirect_uri(base_redirect_uri: str, request_host: str = None) -> str:
+    if not request_host:
+        return base_redirect_uri
+    parsed = urlparse(base_redirect_uri)
+    return parsed._replace(netloc=request_host).geturl()
+
+
+def get_spotify_oauth(state: str = None, redirect_uri: str = None) -> SpotifyOAuth:
+    effective_redirect_uri = redirect_uri or settings.SPOTIFY_REDIRECT_URI
     return SpotifyOAuth(
         client_id=settings.SPOTIFY_CLIENT_ID,
         client_secret=settings.SPOTIFY_CLIENT_SECRET,
-        redirect_uri=settings.SPOTIFY_REDIRECT_URI,
+        redirect_uri=effective_redirect_uri,
         scope=' '.join(SPOTIFY_SCOPES),
         state=state,
         show_dialog=True,
     )
 
 
-def get_spotify_auth_url(state: str) -> str:
-    sp_oauth = get_spotify_oauth(state=state)
+def get_spotify_auth_url(state: str, redirect_uri: str = None) -> str:
+    sp_oauth = get_spotify_oauth(state=state, redirect_uri=redirect_uri)
     return sp_oauth.get_authorize_url()
 
 
-def exchange_spotify_code(code: str) -> dict:
-    sp_oauth = get_spotify_oauth()
+def exchange_spotify_code(code: str, redirect_uri: str = None) -> dict:
+    sp_oauth = get_spotify_oauth(redirect_uri=redirect_uri)
     token_info = sp_oauth.get_access_token(code, as_dict=True, check_cache=False)
     return token_info
 
