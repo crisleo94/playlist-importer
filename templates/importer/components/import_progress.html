@@ -101,7 +101,13 @@
                                 <div class="text-2xl">⚠</div>
                                 <div>
                                     <div class="font-bold text-sm text-amber-200">Importación Parcialmente Completada</div>
-                                    <div class="text-[11px] text-amber-400 mt-0.5">Se transfirieron {{ job.successful_tracks }} de {{ job.total_tracks }} canciones. Las pistas no encontradas o fallidas figuran debajo.</div>
+                                    <div class="text-[11px] text-amber-400 mt-0.5">
+                                        {% if job.error_message %}
+                                            {{ job.error_message }}
+                                        {% else %}
+                                            Se transfirieron {{ job.successful_tracks }} de {{ job.total_tracks }} canciones. Las pistas no encontradas o fallidas figuran debajo.
+                                        {% endif %}
+                                    </div>
                                 </div>
                             </div>
                         {% else %}
@@ -141,7 +147,11 @@
                                                 <div class="font-medium text-slate-200 truncate">{{ item.source_title }}</div>
                                                 <div class="text-[10px] text-slate-400 truncate">{{ item.source_artist }}</div>
                                             </div>
-                                            {% if item.status == 'failed' %}
+                                            {% if 'cuota' in item.error_message.lower or '429' in item.error_message %}
+                                                <span class="text-[10px] text-amber-400 bg-amber-950/40 px-2 py-0.5 rounded border border-amber-900/50" title="{{ item.error_message }}">
+                                                    Cuota alcanzada
+                                                </span>
+                                            {% elif item.status == 'failed' %}
                                                 <span class="text-[10px] text-rose-400 bg-rose-950/40 px-2 py-0.5 rounded border border-rose-900/50" title="{{ item.error_message }}">
                                                     Fallo de inserción
                                                 </span>

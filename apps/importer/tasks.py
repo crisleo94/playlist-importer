@@ -23,6 +23,12 @@ from apps.integrations.youtube import (
 logger = logging.getLogger(__name__)
 
 
+def _is_quota_error(exc: Exception) -> bool:
+    err_str = str(exc).lower()
+    return any(k in err_str for k in ('quotaexceeded', 'ratelimit', '429', 'user_rate_limit_exceeded'))
+
+
+
 @shared_task(bind=True, time_limit=900, soft_time_limit=840)
 def run_playlist_import(self, job_id: int):
     try:
@@ -90,6 +96,7 @@ def run_playlist_import(self, job_id: int):
             if job.source_platform == ImportJob.PLATFORM_SPOTIFY and job.target_platform == ImportJob.PLATFORM_YOUTUBE:
                 matched = match_spotify_track_to_youtube(job.user, track, yt_client=target_client)
             elif job.source_platform == ImportJob.PLATFORM_YOUTUBE and job.target_platform == ImportJob.PLATFORM_SPOTIFY:
+                time.sleep(0.08)
                 matched = match_youtube_track_to_spotify(job.user, track, sp_client=target_client)
 
             if matched:
@@ -119,13 +126,20 @@ def run_playlist_import(self, job_id: int):
                         )
                         item.status = ImportJobItem.STATUS_ADDED
                         job.successful_tracks += 1
-                        time.sleep(0.15)  # Pausa de cortesía para control de rate limits
+                        time.sleep(0.15)
+                        item.save(update_fields=['status'])
                     except Exception as e:
                         logger.warning("Error al insertar video en YouTube playlist: %s", e)
+                        is_quota = _is_quota_error(e)
                         item.status = ImportJobItem.STATUS_FAILED
-                        item.error_message = str(e)
+                        item.error_message = "Límite de cuota diaria de YouTube alcanzado" if is_quota else str(e)
+                        item.save(update_fields=['status', 'error_message'])
                         job.failed_tracks += 1
-                    item.save(update_fields=['status', 'error_message'])
+                        if is_quota:
+                            job.error_message = "Límite de cuota diaria de YouTube Music alcanzado (Google Cloud). Se detuvo la transferencia para proteger la cuenta."
+                            job.processed_tracks += 1
+                            job.save(update_fields=['processed_tracks', 'successful_tracks', 'failed_tracks', 'error_message', 'updated_at'])
+                            break
 
                 elif job.target_platform == ImportJob.PLATFORM_SPOTIFY:
                     if matched.get('uri'):
@@ -146,13 +160,20 @@ def run_playlist_import(self, job_id: int):
                                     job.successful_tracks += 1
                             except Exception as e:
                                 logger.warning("Error al insertar lote en Spotify playlist: %s", e)
+                                is_quota = _is_quota_error(e)
+                                err_msg = "Límite de peticiones de Spotify alcanzado (429)" if is_quota else str(e)
                                 for pending in pending_spotify_items:
                                     pending.status = ImportJobItem.STATUS_FAILED
-                                    pending.error_message = str(e)
+                                    pending.error_message = err_msg
                                     pending.save(update_fields=['status', 'error_message'])
                                     job.failed_tracks += 1
-                            spotify_uri_batch = []
-                            pending_spotify_items = []
+                                spotify_uri_batch = []
+                                pending_spotify_items = []
+                                if is_quota:
+                                    job.error_message = "Límite de peticiones de Spotify alcanzado (HTTP 429). Se detuvo la transferencia."
+                                    job.processed_tracks += 1
+                                    job.save(update_fields=['processed_tracks', 'successful_tracks', 'failed_tracks', 'error_message', 'updated_at'])
+                                    break
             else:
                 ImportJobItem.objects.create(
                     job=job,
