@@ -1,4 +1,5 @@
 from datetime import timedelta, timezone as dt_timezone
+from urllib.parse import urlparse
 import google.oauth2.credentials
 from google_auth_oauthlib.flow import Flow
 from google.auth.transport.requests import Request
@@ -12,6 +13,8 @@ YOUTUBE_SCOPES = [
     'https://www.googleapis.com/auth/youtube.force-ssl',
     'https://www.googleapis.com/auth/userinfo.profile',
 ]
+
+LOCAL_DEV_HOSTS = {'localhost:8000', '127.0.0.1:8000'}
 
 
 def _to_aware_utc(dt):
@@ -29,40 +32,51 @@ def _pick_thumbnail(thumbnails: dict) -> str | None:
     return None
 
 
-def _get_client_config() -> dict:
+def resolve_redirect_uri(base_redirect_uri: str, request_host: str = None) -> str:
+    if not settings.DEBUG or not request_host or request_host not in LOCAL_DEV_HOSTS:
+        return base_redirect_uri
+    parsed = urlparse(base_redirect_uri)
+    return parsed._replace(netloc=request_host).geturl()
+
+
+def _get_client_config(redirect_uri: str = None) -> dict:
+    effective_redirect_uri = redirect_uri or settings.GOOGLE_REDIRECT_URI
     return {
         'web': {
             'client_id': settings.GOOGLE_CLIENT_ID,
             'client_secret': settings.GOOGLE_CLIENT_SECRET,
             'auth_uri': 'https://accounts.google.com/o/oauth2/auth',
             'token_uri': 'https://oauth2.googleapis.com/token',
-            'redirect_uris': [settings.GOOGLE_REDIRECT_URI],
+            'redirect_uris': [effective_redirect_uri],
         }
     }
 
 
-def get_youtube_flow(state: str = None) -> Flow:
+def get_youtube_flow(state: str = None, redirect_uri: str = None) -> Flow:
+    effective_redirect_uri = redirect_uri or settings.GOOGLE_REDIRECT_URI
     flow = Flow.from_client_config(
-        _get_client_config(),
+        _get_client_config(redirect_uri=effective_redirect_uri),
         scopes=YOUTUBE_SCOPES,
         state=state,
     )
-    flow.redirect_uri = settings.GOOGLE_REDIRECT_URI
+    flow.redirect_uri = effective_redirect_uri
     return flow
 
 
-def get_youtube_auth_url(state: str) -> str:
-    flow = get_youtube_flow(state=state)
+def get_youtube_auth_url(state: str, redirect_uri: str = None) -> tuple[str, str]:
+    flow = get_youtube_flow(state=state, redirect_uri=redirect_uri)
     authorization_url, _ = flow.authorization_url(
         access_type='offline',
         include_granted_scopes='true',
         prompt='consent',
     )
-    return authorization_url
+    return authorization_url, flow.code_verifier
 
 
-def exchange_youtube_code(code: str) -> dict:
-    flow = get_youtube_flow()
+def exchange_youtube_code(code: str, code_verifier: str = None, redirect_uri: str = None) -> dict:
+    flow = get_youtube_flow(redirect_uri=redirect_uri)
+    if code_verifier:
+        flow.code_verifier = code_verifier
     flow.fetch_token(code=code)
     credentials = flow.credentials
 

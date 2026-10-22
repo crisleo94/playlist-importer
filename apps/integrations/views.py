@@ -1,14 +1,25 @@
 import logging
 import secrets
 from datetime import timedelta
+from django.conf import settings
 from django.contrib.auth.decorators import login_required
 from django.contrib import messages
-from django.http import JsonResponse, HttpResponseBadRequest
+from django.http import HttpResponseBadRequest, JsonResponse
 from django.shortcuts import redirect, render
 from django.utils import timezone
 from .models import PlatformToken
-from .spotify import get_spotify_auth_url, exchange_spotify_code, get_spotify_client
-from .youtube import get_youtube_auth_url, exchange_youtube_code, get_youtube_client
+from .spotify import (
+    get_spotify_auth_url,
+    exchange_spotify_code,
+    get_spotify_client,
+    resolve_redirect_uri as resolve_spotify_redirect_uri,
+)
+from .youtube import (
+    get_youtube_auth_url,
+    exchange_youtube_code,
+    get_youtube_client,
+    resolve_redirect_uri as resolve_youtube_redirect_uri,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -16,13 +27,19 @@ logger = logging.getLogger(__name__)
 @login_required
 def spotify_connect(request):
     state = secrets.token_urlsafe(16)
+    redirect_uri = resolve_spotify_redirect_uri(settings.SPOTIFY_REDIRECT_URI, request.get_host())
     request.session['spotify_oauth_state'] = state
-    return redirect(get_spotify_auth_url(state=state))
+    request.session['spotify_redirect_uri'] = redirect_uri
+    return redirect(get_spotify_auth_url(state=state, redirect_uri=redirect_uri))
 
 
 @login_required
 def spotify_callback(request):
     expected_state = request.session.pop('spotify_oauth_state', None)
+    redirect_uri = request.session.pop('spotify_redirect_uri', None)
+    if not redirect_uri:
+        redirect_uri = resolve_spotify_redirect_uri(settings.SPOTIFY_REDIRECT_URI, request.get_host())
+
     received_state = request.GET.get('state')
     error = request.GET.get('error')
 
@@ -38,7 +55,7 @@ def spotify_callback(request):
         return HttpResponseBadRequest('Missing authorization code.')
 
     try:
-        token_info = exchange_spotify_code(code)
+        token_info = exchange_spotify_code(code, redirect_uri=redirect_uri)
         access_token = token_info['access_token']
         refresh_token = token_info.get('refresh_token', '')
         expires_in = token_info.get('expires_in', 3600)
@@ -82,13 +99,22 @@ def spotify_disconnect(request):
 @login_required
 def youtube_connect(request):
     state = secrets.token_urlsafe(16)
+    redirect_uri = resolve_youtube_redirect_uri(settings.GOOGLE_REDIRECT_URI, request.get_host())
+    auth_url, code_verifier = get_youtube_auth_url(state=state, redirect_uri=redirect_uri)
     request.session['youtube_oauth_state'] = state
-    return redirect(get_youtube_auth_url(state=state))
+    request.session['youtube_code_verifier'] = code_verifier
+    request.session['youtube_redirect_uri'] = redirect_uri
+    return redirect(auth_url)
 
 
 @login_required
 def youtube_callback(request):
     expected_state = request.session.pop('youtube_oauth_state', None)
+    code_verifier = request.session.pop('youtube_code_verifier', None)
+    redirect_uri = request.session.pop('youtube_redirect_uri', None)
+    if not redirect_uri:
+        redirect_uri = resolve_youtube_redirect_uri(settings.GOOGLE_REDIRECT_URI, request.get_host())
+
     received_state = request.GET.get('state')
     error = request.GET.get('error')
 
@@ -104,7 +130,7 @@ def youtube_callback(request):
         return HttpResponseBadRequest('Missing authorization code.')
 
     try:
-        token_info = exchange_youtube_code(code)
+        token_info = exchange_youtube_code(code, code_verifier=code_verifier, redirect_uri=redirect_uri)
         access_token = token_info['token']
         refresh_token = token_info.get('refresh_token', '')
         expiry = token_info.get('expiry')

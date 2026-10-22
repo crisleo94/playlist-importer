@@ -9,15 +9,27 @@
 
     <form method="post" class="space-y-4">
         {% csrf_token %}
+        {% if form.non_field_errors %}
+            <div class="p-3 rounded-lg bg-rose-950/60 border border-rose-800 text-rose-300 text-sm">
+                {{ form.non_field_errors }}
+            </div>
+        {% endif %}
+
         {% for field in form %}
             <div>
-                <label class="block text-xs font-medium text-slate-300 mb-1.5">{{ field.label }}</label>
+                <label class="block text-xs font-medium text-slate-300 mb-1.5" for="{{ field.id_for_label }}">
+                    {{ field.label }}
+                </label>
                 {{ field }}
                 {% if field.help_text %}
                     <p class="text-[11px] text-slate-500 mt-1">{{ field.help_text }}</p>
                 {% endif %}
                 {% if field.errors %}
-                    <p class="text-xs text-rose-400 mt-1">{{ field.errors.0 }}</p>
+                    <ul class="text-xs text-rose-400 mt-1 space-y-0.5 list-none">
+                        {% for error in field.errors %}
+                            <li>{{ error }}</li>
+                        {% endfor %}
+                    </ul>
                 {% endif %}
             </div>
         {% endfor %}
