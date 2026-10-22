@@ -1,5 +1,6 @@
 from unittest.mock import patch
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from django.test import TestCase, Client
 from django.urls import reverse
 from apps.integrations.models import PlatformToken
@@ -9,8 +10,12 @@ User = get_user_model()
 
 class ImporterDashboardTests(TestCase):
     def setUp(self):
+        cache.clear()
         self.client = Client()
         self.user = User.objects.create_user(username="testuser", password="password123")
+
+    def tearDown(self):
+        cache.clear()
 
     def test_dashboard_requires_login(self):
         response = self.client.get(reverse('importer:dashboard'))
@@ -24,6 +29,10 @@ class ImporterDashboardTests(TestCase):
         self.assertContains(response, "Playlists de Spotify")
         self.assertContains(response, "Playlists de YouTube Music")
 
+    def test_spotify_playlists_requires_login(self):
+        response = self.client.get(reverse('importer:spotify_playlists'))
+        self.assertEqual(response.status_code, 302)
+
     def test_spotify_playlists_unconnected(self):
         self.client.login(username="testuser", password="password123")
         response = self.client.get(reverse('importer:spotify_playlists'))
@@ -31,7 +40,7 @@ class ImporterDashboardTests(TestCase):
         self.assertContains(response, "Spotify no conectado")
 
     @patch('apps.importer.views.get_user_spotify_playlists')
-    def test_spotify_playlists_connected_and_search(self, mock_get_playlists):
+    def test_spotify_playlists_connected_and_search_cached(self, mock_get_playlists):
         self.client.login(username="testuser", password="password123")
         token = PlatformToken.objects.create(
             user=self.user,
@@ -62,18 +71,39 @@ class ImporterDashboardTests(TestCase):
             }
         ]
 
+        # First request populates cache
         response = self.client.get(reverse('importer:spotify_playlists'))
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Rock Classics")
         self.assertContains(response, "Lo-Fi Chill")
-        self.assertContains(response, "25 temas")
+        self.assertEqual(mock_get_playlists.call_count, 1)
 
-        # Test with search query
-        mock_get_playlists.return_value = [mock_get_playlists.return_value[0]]
+        # Subsequent keystroke search uses cached playlists without calling external API again
         response_q = self.client.get(reverse('importer:spotify_playlists'), {'q': 'Rock'})
         self.assertEqual(response_q.status_code, 200)
         self.assertContains(response_q, "Rock Classics")
         self.assertNotContains(response_q, "Lo-Fi Chill")
+        self.assertEqual(mock_get_playlists.call_count, 1)
+
+    @patch('apps.importer.views.get_user_spotify_playlists')
+    def test_spotify_playlists_exception_handling_sanitizes_message(self, mock_get_playlists):
+        self.client.login(username="testuser", password="password123")
+        token = PlatformToken.objects.create(
+            user=self.user,
+            platform=PlatformToken.PLATFORM_SPOTIFY
+        )
+        token.set_access_token("token")
+        token.save()
+
+        mock_get_playlists.side_effect = Exception("Internal HTTP 429 quota_exceeded_secret_uri")
+        response = self.client.get(reverse('importer:spotify_playlists'))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "No se pudo cargar tu biblioteca de Spotify")
+        self.assertNotContains(response, "quota_exceeded_secret_uri")
+
+    def test_youtube_playlists_requires_login(self):
+        response = self.client.get(reverse('importer:youtube_playlists'))
+        self.assertEqual(response.status_code, 302)
 
     def test_youtube_playlists_unconnected(self):
         self.client.login(username="testuser", password="password123")
@@ -111,6 +141,34 @@ class ImporterDashboardTests(TestCase):
         self.assertContains(response, "15 temas")
         self.assertContains(response, "public")
 
+    @patch('apps.importer.views.get_user_youtube_playlists')
+    def test_youtube_playlists_exception_handling_sanitizes_message(self, mock_get_playlists):
+        self.client.login(username="testuser", password="password123")
+        token = PlatformToken.objects.create(
+            user=self.user,
+            platform=PlatformToken.PLATFORM_YOUTUBE
+        )
+        token.set_access_token("token")
+        token.save()
+
+        mock_get_playlists.side_effect = Exception("Google Cloud Quota Exceeded 403 Forbidden")
+        response = self.client.get(reverse('importer:youtube_playlists'))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "No se pudo cargar tu biblioteca de YouTube Music")
+        self.assertNotContains(response, "Google Cloud Quota Exceeded")
+
+    def test_playlist_tracks_modal_requires_login(self):
+        url = reverse('importer:playlist_tracks_modal', kwargs={'platform': 'spotify', 'playlist_id': 'sp_1'})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 302)
+
+    def test_playlist_tracks_modal_unsupported_platform(self):
+        self.client.login(username="testuser", password="password123")
+        url = reverse('importer:playlist_tracks_modal', kwargs={'platform': 'unsupported_foo', 'playlist_id': 'xyz'})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Plataforma no soportada.")
+
     @patch('apps.importer.views.get_spotify_playlist_tracks')
     def test_playlist_tracks_modal_spotify(self, mock_get_tracks):
         self.client.login(username="testuser", password="password123")
@@ -127,11 +185,12 @@ class ImporterDashboardTests(TestCase):
         ]
 
         url = reverse('importer:playlist_tracks_modal', kwargs={'platform': 'spotify', 'playlist_id': 'sp_1'})
-        response = self.client.get(f"{url}?name=Queen+Best")
+        response = self.client.get(f"{url}?name=Queen+Best&total=150")
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Bohemian Rhapsody")
         self.assertContains(response, "Queen")
         self.assertContains(response, "GBUM71029604")
+        self.assertContains(response, "Mostrando 1 de 150 temas")
 
     @patch('apps.importer.views.get_youtube_playlist_tracks')
     def test_playlist_tracks_modal_youtube(self, mock_get_tracks):
@@ -150,3 +209,14 @@ class ImporterDashboardTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Nightcall - Kavinsky")
         self.assertContains(response, "Drive OST")
+
+    @patch('apps.importer.views.get_spotify_playlist_tracks')
+    def test_playlist_tracks_modal_exception_handling_sanitizes_message(self, mock_get_tracks):
+        self.client.login(username="testuser", password="password123")
+        mock_get_tracks.side_effect = Exception("Database connection failure in backend")
+
+        url = reverse('importer:playlist_tracks_modal', kwargs={'platform': 'spotify', 'playlist_id': 'sp_err'})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "No se pudieron obtener las canciones de la lista seleccionada.")
+        self.assertNotContains(response, "Database connection failure in backend")

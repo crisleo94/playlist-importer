@@ -20,7 +20,11 @@
                 <div class="min-w-0">
                     <h3 class="font-bold text-base text-slate-100 truncate">{{ playlist_name }}</h3>
                     <p class="text-xs text-slate-400">
-                        {{ tracks|length }} canciones en {{ platform|title }}
+                        {% if total_tracks and total_tracks > tracks|length %}
+                            Mostrando {{ tracks|length }} de {{ total_tracks }} temas en {{ platform|title }}
+                        {% else %}
+                            {{ tracks|length }} canciones en {{ platform|title }}
+                        {% endif %}
                     </p>
                 </div>
             </div>
@@ -63,6 +67,12 @@
                         </div>
                     {% endfor %}
                 </div>
+
+                {% if total_tracks and total_tracks > tracks|length %}
+                    <div class="p-2.5 mt-3 rounded-lg bg-slate-950/60 border border-slate-800 text-center text-xs text-slate-400">
+                        Vista previa limitada a las primeras {{ tracks|length }} canciones. Al transferir se procesará la lista completa.
+                    </div>
+                {% endif %}
             {% else %}
                 <div class="text-center py-10 text-xs text-slate-500">
                     No se encontraron canciones en esta playlist.

@@ -13,9 +13,9 @@
     </div>
 {% elif error_message %}
     <div class="p-4 rounded-xl bg-rose-950/40 border border-rose-800/60 text-rose-300 text-xs">
-        <div class="font-semibold mb-1">Error al consultar Spotify:</div>
+        <div class="font-semibold mb-1">Aviso de Spotify:</div>
         <p class="text-rose-400 mb-3">{{ error_message }}</p>
-        <button hx-get="{% url 'importer:spotify_playlists' %}" hx-target="#spotify-playlists-container" hx-indicator="#spotify-spinner" class="bg-rose-900/60 hover:bg-rose-800 text-white px-3 py-1.5 rounded-lg text-xs font-medium transition">
+        <button hx-get="{% url 'importer:spotify_playlists' %}?refresh=true" hx-target="#spotify-playlists-container" hx-indicator="#spotify-spinner" class="bg-rose-900/60 hover:bg-rose-800 text-white px-3 py-1.5 rounded-lg text-xs font-medium transition">
             Reintentar
         </button>
     </div>
@@ -23,7 +23,7 @@
     <div class="space-y-3">
         <div class="flex items-center justify-between text-xs text-slate-400 px-1">
             <span>{{ playlists|length }} playlists encontradas</span>
-            <button hx-get="{% url 'importer:spotify_playlists' %}" hx-target="#spotify-playlists-container" hx-indicator="#spotify-spinner" class="hover:text-slate-200 transition text-[11px] flex items-center gap-1">
+            <button hx-get="{% url 'importer:spotify_playlists' %}?refresh=true" hx-target="#spotify-playlists-container" hx-indicator="#spotify-spinner" class="hover:text-slate-200 transition text-[11px] flex items-center gap-1">
                 <span>🔄</span> Actualizar
             </button>
         </div>
@@ -60,7 +60,7 @@
                             </a>
                         {% endif %}
 
-                        <button hx-get="{% url 'importer:playlist_tracks_modal' platform='spotify' playlist_id=pl.id %}?name={{ pl.name|urlencode }}" hx-target="#modal-container" class="px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white text-xs border border-slate-800 transition">
+                        <button hx-get="{% url 'importer:playlist_tracks_modal' platform='spotify' playlist_id=pl.id %}?name={{ pl.name|urlencode }}&total={{ pl.total_tracks }}" hx-target="#modal-container" class="px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white text-xs border border-slate-800 transition">
                             Ver temas
                         </button>
 
