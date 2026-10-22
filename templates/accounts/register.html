@@ -21,6 +21,9 @@
                     {{ field.label }}
                 </label>
                 {{ field }}
+                {% if field.help_text %}
+                    <p class="text-[11px] text-slate-500 mt-1">{{ field.help_text }}</p>
+                {% endif %}
                 {% if field.errors %}
                     <ul class="text-xs text-rose-400 mt-1 space-y-0.5 list-none">
                         {% for error in field.errors %}

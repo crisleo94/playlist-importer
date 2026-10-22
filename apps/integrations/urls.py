@@ -3,6 +3,7 @@ from . import views
 
 app_name = 'integrations'
 
+# Rutas estándar con slash y alias sin slash por discrepancias de configuración en Spotify/Google Dev Consoles
 urlpatterns = [
     path('spotify/connect/', views.spotify_connect, name='spotify_connect'),
     path('spotify/callback/', views.spotify_callback, name='spotify_callback'),

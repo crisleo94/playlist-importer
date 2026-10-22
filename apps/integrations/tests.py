@@ -72,14 +72,32 @@ class IntegrationsViewTests(TestCase):
         self.client = Client()
         self.user = User.objects.create_user(username="testuser", password="password123")
 
-    def test_resolve_redirect_uri_preserves_host_or_adapts(self):
+    @override_settings(DEBUG=True)
+    def test_resolve_redirect_uri_in_debug_allowed_hosts(self):
         self.assertEqual(
             resolve_spotify_uri('http://localhost:8000/integrations/spotify/callback/', '127.0.0.1:8000'),
             'http://127.0.0.1:8000/integrations/spotify/callback/'
         )
         self.assertEqual(
-            resolve_youtube_uri('http://localhost:8000/integrations/youtube/callback/', None),
+            resolve_youtube_uri('http://localhost:8000/integrations/youtube/callback/', 'localhost:8000'),
             'http://localhost:8000/integrations/youtube/callback/'
+        )
+        # Host outside local dev whitelist is rejected even in DEBUG
+        self.assertEqual(
+            resolve_spotify_uri('http://localhost:8000/integrations/spotify/callback/', 'evil.com'),
+            'http://localhost:8000/integrations/spotify/callback/'
+        )
+
+    @override_settings(DEBUG=False)
+    def test_resolve_redirect_uri_in_production_is_static(self):
+        # In production (DEBUG=False), never rewrite redirect_uri based on Host header
+        self.assertEqual(
+            resolve_spotify_uri('https://myapp.com/integrations/spotify/callback/', '127.0.0.1:8000'),
+            'https://myapp.com/integrations/spotify/callback/'
+        )
+        self.assertEqual(
+            resolve_youtube_uri('https://myapp.com/integrations/youtube/callback/', 'sub.myapp.com'),
+            'https://myapp.com/integrations/youtube/callback/'
         )
 
     def test_connection_status_requires_login(self):
@@ -179,6 +197,29 @@ class IntegrationsViewTests(TestCase):
         self.assertEqual(token.platform_username, 'SpotifyTester')
         self.assertFalse(token.is_expired())
 
+    @patch('apps.integrations.views.exchange_spotify_code')
+    @patch('apps.integrations.views.get_spotify_client')
+    def test_spotify_callback_noslash_route(self, mock_get_client, mock_exchange):
+        self.client.login(username="testuser", password="password123")
+        session = self.client.session
+        session['spotify_oauth_state'] = 'valid_state'
+        session.save()
+
+        mock_exchange.return_value = {
+            'access_token': 'test_sp_access_noslash',
+            'refresh_token': 'test_sp_refresh_noslash',
+            'expires_in': 3600,
+        }
+        mock_sp = MagicMock()
+        mock_sp.current_user.return_value = {'display_name': 'SpotifyNoSlash', 'id': 'spot_noslash'}
+        mock_get_client.return_value = mock_sp
+
+        response = self.client.get(reverse('integrations:spotify_callback_noslash'), {'state': 'valid_state', 'code': 'auth_code'})
+        self.assertRedirects(response, reverse('importer:dashboard'))
+
+        token = PlatformToken.objects.get(user=self.user, platform=PlatformToken.PLATFORM_SPOTIFY)
+        self.assertEqual(token.platform_username, 'SpotifyNoSlash')
+
     def test_youtube_connect_stores_pkce_verifier(self):
         self.client.login(username="testuser", password="password123")
         with patch('apps.integrations.views.get_youtube_auth_url', return_value=('https://accounts.google.com/auth', 'mock_verifier_xyz')):
@@ -243,3 +284,30 @@ class IntegrationsViewTests(TestCase):
         # Must be timezone-aware and comparable in memory without TypeError
         self.assertFalse(timezone.is_naive(token.expires_at))
         self.assertFalse(token.is_expired())
+
+    @patch('apps.integrations.views.exchange_youtube_code')
+    @patch('apps.integrations.views.get_youtube_client')
+    def test_youtube_callback_noslash_route(self, mock_get_client, mock_exchange):
+        self.client.login(username="testuser", password="password123")
+        session = self.client.session
+        session['youtube_oauth_state'] = 'valid_state'
+        session.save()
+
+        mock_exchange.return_value = {
+            'token': 'test_yt_access_noslash',
+            'refresh_token': 'test_yt_refresh_noslash',
+            'expiry': timezone.now() + timedelta(hours=1),
+        }
+        mock_yt = MagicMock()
+        mock_channels = MagicMock()
+        mock_channels.list.return_value.execute.return_value = {
+            'items': [{'id': 'yt_noslash_123', 'snippet': {'title': 'Channel NoSlash'}}]
+        }
+        mock_yt.channels.return_value = mock_channels
+        mock_get_client.return_value = mock_yt
+
+        response = self.client.get(reverse('integrations:youtube_callback_noslash'), {'state': 'valid_state', 'code': 'auth_code'})
+        self.assertRedirects(response, reverse('importer:dashboard'))
+
+        token = PlatformToken.objects.get(user=self.user, platform=PlatformToken.PLATFORM_YOUTUBE)
+        self.assertEqual(token.platform_username, 'Channel NoSlash')

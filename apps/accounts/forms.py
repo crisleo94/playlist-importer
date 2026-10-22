@@ -20,5 +20,7 @@ class RegisterForm(UserCreationForm):
             field.widget.attrs.update({'class': INPUT_CLASSES})
             field.help_text = ''
         self.fields['username'].widget.attrs.update({'autofocus': True, 'placeholder': 'Ej. usuario'})
+        self.fields['username'].help_text = 'Hasta 150 caracteres. Letras, dígitos y @/./+/-/_ únicamente.'
         self.fields['password1'].widget.attrs.update({'placeholder': 'Mínimo 8 caracteres'})
+        self.fields['password1'].help_text = 'Mínimo 8 caracteres, no enteramente numérica ni demasiado común.'
         self.fields['password2'].widget.attrs.update({'placeholder': 'Repite la contraseña'})

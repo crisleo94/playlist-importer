@@ -13,9 +13,11 @@ SPOTIFY_SCOPES = [
     'playlist-modify-private',
 ]
 
+LOCAL_DEV_HOSTS = {'localhost:8000', '127.0.0.1:8000'}
+
 
 def resolve_redirect_uri(base_redirect_uri: str, request_host: str = None) -> str:
-    if not request_host:
+    if not settings.DEBUG or not request_host or request_host not in LOCAL_DEV_HOSTS:
         return base_redirect_uri
     parsed = urlparse(base_redirect_uri)
     return parsed._replace(netloc=request_host).geturl()
