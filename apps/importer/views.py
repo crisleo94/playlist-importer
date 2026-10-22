@@ -184,7 +184,7 @@ def preview_match_view(request, source_platform, playlist_id):
                 source_platform=source_platform,
                 target_platform=target_platform,
                 playlist_id=playlist_id,
-                limit=30
+                limit=15
             )
 
             if target_platform == 'youtube':

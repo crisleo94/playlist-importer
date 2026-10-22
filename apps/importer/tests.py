@@ -236,7 +236,10 @@ class MatcherCleaningAndParsingTests(TestCase):
         self.assertEqual(clean_title("Bohemian Rhapsody (Official Video)"), "Bohemian Rhapsody")
         self.assertEqual(clean_title("Starboy [Official Music Video]"), "Starboy")
         self.assertEqual(clean_title("One Dance (feat. Wizkid & Kyla)"), "One Dance")
-        self.assertEqual(clean_title("Hotel California - 2013 Remaster"), "Hotel California -")
+        self.assertEqual(clean_title("Hotel California - 2013 Remaster"), "Hotel California")
+        self.assertEqual(clean_title("Hotel California (2013 Remaster)"), "Hotel California")
+        self.assertEqual(clean_title("Hotel California - 2013 Remastered Version"), "Hotel California")
+        self.assertEqual(clean_title("Hotel California [2013 Remastered Version]"), "Hotel California")
         self.assertEqual(clean_title("Despacito (Video Oficial) [4K]"), "Despacito")
         self.assertEqual(clean_title(""), "")
 
@@ -268,10 +271,14 @@ class MatcherCleaningAndParsingTests(TestCase):
 
 class MatcherAlgorithmTests(TestCase):
     def setUp(self):
+        cache.clear()
         self.user = User.objects.create_user(username="matcher_user", password="password123")
 
+    def tearDown(self):
+        cache.clear()
+
     @patch('apps.importer.matcher.get_youtube_client')
-    def test_match_spotify_track_to_youtube_isrc_success(self, mock_get_yt):
+    def test_match_spotify_track_to_youtube_isrc_boost_with_similarity(self, mock_get_yt):
         mock_yt = MagicMock()
         mock_get_yt.return_value = mock_yt
         mock_yt.search().list().execute.return_value = {
@@ -280,6 +287,7 @@ class MatcherAlgorithmTests(TestCase):
                     'id': {'videoId': 'vid_isrc_123'},
                     'snippet': {
                         'title': 'Queen - Bohemian Rhapsody (Official Video)',
+                        'description': 'Provided to YouTube by UMG. ISRC: GBUM71029604',
                         'channelTitle': 'Queen Official',
                     }
                 }
@@ -296,37 +304,46 @@ class MatcherAlgorithmTests(TestCase):
         self.assertIsNotNone(matched)
         self.assertEqual(matched['id'], 'vid_isrc_123')
         self.assertEqual(matched['match_type'], 'isrc')
-        self.assertGreaterEqual(matched['score'], 0.95)
+        self.assertGreaterEqual(matched['score'], 0.85)
 
     @patch('apps.importer.matcher.get_youtube_client')
-    def test_match_spotify_track_to_youtube_fuzzy_fallback(self, mock_get_yt):
+    def test_match_spotify_track_to_youtube_fuzzy_match_single_query_and_cache(self, mock_get_yt):
         mock_yt = MagicMock()
         mock_get_yt.return_value = mock_yt
-        mock_yt.search().list().execute.side_effect = [
-            {'items': []},
-            {
-                'items': [
-                    {
-                        'id': {'videoId': 'vid_fuzzy_456'},
-                        'snippet': {
-                            'title': 'The Weeknd - Blinding Lights (Audio)',
-                            'channelTitle': 'TheWeekndVEVO',
-                        }
+        mock_list = mock_yt.search().list
+        mock_list.reset_mock()
+        mock_list.return_value.execute.return_value = {
+            'items': [
+                {
+                    'id': {'videoId': 'vid_fuzzy_456'},
+                    'snippet': {
+                        'title': 'The Weeknd - Blinding Lights (Audio)',
+                        'description': 'Audio official',
+                        'channelTitle': 'TheWeekndVEVO',
                     }
-                ]
-            }
-        ]
+                }
+            ]
+        }
 
         track = {
+            'id': 'trk_weeknd_1',
             'title': 'Blinding Lights',
             'artist': 'The Weeknd',
             'isrc': 'USUM71900764',
         }
 
+        # First call calls YouTube API
         matched = match_spotify_track_to_youtube(self.user, track)
         self.assertIsNotNone(matched)
         self.assertEqual(matched['id'], 'vid_fuzzy_456')
         self.assertEqual(matched['match_type'], 'fuzzy')
+        self.assertEqual(mock_list.call_count, 1)
+
+        # Second call uses cache, no redundant search.list API call (saves 100 quota units)
+        cached_matched = match_spotify_track_to_youtube(self.user, track)
+        self.assertIsNotNone(cached_matched)
+        self.assertEqual(cached_matched['id'], 'vid_fuzzy_456')
+        self.assertEqual(mock_list.call_count, 1)
 
     @patch('apps.importer.matcher.get_youtube_client')
     def test_match_spotify_track_to_youtube_penalizes_karaoke_and_covers(self, mock_get_yt):
@@ -432,9 +449,10 @@ class PreviewPlaylistMatchTests(TestCase):
     def setUp(self):
         self.user = User.objects.create_user(username="prev_user", password="password123")
 
+    @patch('apps.importer.matcher.get_youtube_client')
     @patch('apps.importer.matcher.match_spotify_track_to_youtube')
     @patch('apps.importer.matcher.get_spotify_playlist_tracks')
-    def test_preview_playlist_match_spotify_to_youtube(self, mock_get_tracks, mock_match):
+    def test_preview_playlist_match_spotify_to_youtube(self, mock_get_tracks, mock_match, mock_get_yt):
         mock_get_tracks.return_value = [
             {'id': '1', 'title': 'Song A', 'artist': 'Artist A', 'isrc': 'ISRC1'},
             {'id': '2', 'title': 'Song B', 'artist': 'Artist B', 'isrc': 'ISRC2'},

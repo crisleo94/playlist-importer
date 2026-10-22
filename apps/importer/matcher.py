@@ -1,42 +1,34 @@
+import hashlib
+import logging
 import re
 from difflib import SequenceMatcher
+from django.core.cache import cache
 from apps.integrations.spotify import get_spotify_client, get_spotify_playlist_tracks
 from apps.integrations.youtube import get_youtube_client, get_youtube_playlist_tracks
 
+logger = logging.getLogger(__name__)
+
+MIN_SCORE_YOUTUBE_MATCH = 0.55
+MIN_SCORE_SPOTIFY_MATCH = 0.50
+KARAOKE_PENALTY_FACTOR = 0.50
+ISRC_MATCH_BOOST_MIN_SIMILARITY = 0.35
+ISRC_BOOSTED_SCORE = 0.85
+CACHE_TTL_MATCH = 3600
+
 NOISE_PATTERNS = [
-    r'\(official\s+video\)',
-    r'\[official\s+video\]',
-    r'\(official\s+music\s+video\)',
-    r'\[official\s+music\s+video\]',
-    r'\(official\s+audio\)',
-    r'\[official\s+audio\]',
-    r'\(video\s+oficial\)',
-    r'\[video\s+oficial\]',
-    r'\(audio\s+oficial\)',
-    r'\[audio\s+oficial\]',
-    r'\(lyric\s+video\)',
-    r'\[lyric\s+video\]',
-    r'\(video\s+con\s+letra\)',
-    r'\[video\s+con\s+letra\]',
-    r'\(visualizer\)',
-    r'\[visualizer\]',
-    r'\(remastered(\s+\d{4})?\)',
-    r'\[remastered(\s+\d{4})?\]',
-    r'\(remaster(\s+\d{4})?\)',
-    r'\[remaster(\s+\d{4})?\]',
-    r'\b\d{4}\s+remaster\b',
-    r'\(hd\)',
-    r'\[hd\]',
-    r'\(4k\)',
-    r'\[4k\]',
-    r'\(hq\)',
-    r'\[hq\]',
-    r'\(audio\)',
-    r'\[audio\]',
+    r'[\(\[]\s*(?:official\s+(?:music\s+)?video|official\s+audio|video\s+oficial|audio\s+oficial|lyric\s+video|video\s+con\s+letra|visualizer|hd|4k|hq|audio)\s*[\)\]]',
+    r'[\(\[]\s*(?:\d{4}\s+)?remaster(?:ed)?(?:\s+\d{4})?(?:\s+version)?\s*[\)\]]',
+    r'[-–—]\s*(?:\d{4}\s+)?remaster(?:ed)?(?:\s+\d{4})?(?:\s+version)?',
+    r'\b\d{4}\s+remaster(?:ed)?(?:\s+version)?\b',
 ]
 
 NOISE_REGEX = re.compile('|'.join(NOISE_PATTERNS), re.IGNORECASE)
 FEAT_REGEX = re.compile(r'[\(\[](feat\.|ft\.|featuring).*?[\)\]]', re.IGNORECASE)
+
+
+def _cache_key(prefix: str, raw_key: str) -> str:
+    digest = hashlib.md5(raw_key.encode('utf-8')).hexdigest()
+    return f"{prefix}:{digest}"
 
 
 def clean_title(title: str) -> str:
@@ -44,6 +36,8 @@ def clean_title(title: str) -> str:
         return ''
     cleaned = NOISE_REGEX.sub('', title)
     cleaned = FEAT_REGEX.sub('', cleaned)
+    cleaned = re.sub(r'[\(\[]\s*[\)\]]', '', cleaned)
+    cleaned = re.sub(r'[\s\-–—:]+$', '', cleaned)
     cleaned = re.sub(r'\s+', ' ', cleaned).strip()
     return cleaned
 
@@ -63,13 +57,13 @@ def parse_youtube_title(raw_title: str, channel_title: str = '') -> tuple[str, s
     if ' - ' in cleaned:
         parts = cleaned.split(' - ', 1)
         artist = clean_artist(parts[0].strip())
-        title = parts[1].strip()
+        title = clean_title(parts[1].strip())
         return artist, title
 
     if ':' in cleaned:
         parts = cleaned.split(':', 1)
         artist = clean_artist(parts[0].strip())
-        title = parts[1].strip()
+        title = clean_title(parts[1].strip())
         return artist, title
 
     return clean_artist(channel_title), cleaned
@@ -83,77 +77,62 @@ def compute_similarity(str1: str, str2: str) -> float:
     return SequenceMatcher(None, s1, s2).ratio()
 
 
-def match_spotify_track_to_youtube(user, track: dict) -> dict | None:
-    yt = get_youtube_client(user)
+def match_spotify_track_to_youtube(user, track: dict, yt_client=None) -> dict | None:
     artist = track.get('artist', '')
     title = track.get('title', '')
-    isrc = track.get('isrc', '')
+    isrc = track.get('isrc', '').strip()
 
     cleaned_title = clean_title(title)
     cleaned_artist = clean_artist(artist)
+    query = f"{cleaned_artist} {cleaned_title}".strip()
+    if not query:
+        query = isrc
+    if not query:
+        return None
 
+    cache_key = _cache_key("sp2yt", track.get('id') or isrc or query)
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached if cached != '__NONE__' else None
+
+    yt = yt_client if yt_client is not None else get_youtube_client(user)
     candidates = []
 
-    # Strategy 1: Search by ISRC if available
-    if isrc:
-        try:
-            res = yt.search().list(
-                q=isrc,
-                type='video',
-                part='snippet',
-                maxResults=3
-            ).execute()
-            for item in res.get('items', []):
-                snippet = item.get('snippet', {})
-                candidates.append({
-                    'video_id': item['id']['videoId'],
-                    'title': snippet.get('title', ''),
-                    'channel': snippet.get('channelTitle', ''),
-                    'match_type': 'isrc',
-                })
-        except Exception:
-            pass
-
-    # Strategy 2: Search by cleaned Artist + Title
-    if not candidates:
-        query = f"{cleaned_artist} {cleaned_title}".strip()
-        try:
-            res = yt.search().list(
-                q=query,
-                type='video',
-                part='snippet',
-                maxResults=5
-            ).execute()
-            for item in res.get('items', []):
-                snippet = item.get('snippet', {})
-                candidates.append({
-                    'video_id': item['id']['videoId'],
-                    'title': snippet.get('title', ''),
-                    'channel': snippet.get('channelTitle', ''),
-                    'match_type': 'fuzzy',
-                })
-        except Exception:
-            pass
-
-    if not candidates:
-        return None
+    try:
+        res = yt.search().list(
+            q=query,
+            type='video',
+            part='snippet',
+            maxResults=5
+        ).execute()
+        for item in res.get('items', []):
+            snippet = item.get('snippet', {})
+            cand_title = snippet.get('title', '')
+            cand_desc = snippet.get('description', '')
+            is_isrc_match = bool(isrc and (isrc.lower() in cand_title.lower() or isrc.lower() in cand_desc.lower()))
+            candidates.append({
+                'video_id': item['id']['videoId'],
+                'title': cand_title,
+                'channel': snippet.get('channelTitle', ''),
+                'match_type': 'isrc' if is_isrc_match else 'fuzzy',
+            })
+    except Exception as e:
+        logger.warning("Error en búsqueda de YouTube para '%s': %s", query, e)
 
     best_match = None
     best_score = -1.0
-
-    target_phrase = f"{cleaned_artist} {cleaned_title}".lower()
+    target_phrase = f"{cleaned_artist} {cleaned_title}".lower().strip()
 
     for cand in candidates:
         cand_title = clean_title(cand['title']).lower()
         score = compute_similarity(target_phrase, cand_title)
 
-        # Penalize karaoke, covers or instrumental unless in original title
         for penalty_term in ('karaoke', 'tribute', 'instrumental cover', 'tutorial'):
             if penalty_term in cand_title and penalty_term not in target_phrase:
-                score *= 0.5
+                score *= KARAOKE_PENALTY_FACTOR
 
-        if cand['match_type'] == 'isrc':
-            score = max(score, 0.95)
+        if cand['match_type'] == 'isrc' and score >= ISRC_MATCH_BOOST_MIN_SIMILARITY:
+            score = max(score, ISRC_BOOSTED_SCORE)
 
         if score > best_score:
             best_score = score
@@ -165,21 +144,28 @@ def match_spotify_track_to_youtube(user, track: dict) -> dict | None:
                 'match_type': cand['match_type'],
             }
 
-    if best_match and best_score >= 0.55:
-        return best_match
+    result = best_match if (best_match and best_score >= MIN_SCORE_YOUTUBE_MATCH) else None
+    cache.set(cache_key, result if result is not None else '__NONE__', timeout=CACHE_TTL_MATCH)
+    return result
 
-    return None
 
-
-def match_youtube_track_to_spotify(user, track: dict) -> dict | None:
-    sp = get_spotify_client(user)
+def match_youtube_track_to_spotify(user, track: dict, sp_client=None) -> dict | None:
     raw_title = track.get('title', '')
     raw_artist = track.get('artist', '')
 
     parsed_artist, parsed_title = parse_youtube_title(raw_title, raw_artist)
     cleaned_title = clean_title(parsed_title)
     cleaned_artist = clean_artist(parsed_artist)
+    query_phrase = f"{cleaned_artist} {cleaned_title}".strip() or cleaned_title
+    if not query_phrase:
+        return None
 
+    cache_key = _cache_key("yt2sp", track.get('id') or query_phrase)
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached if cached != '__NONE__' else None
+
+    sp = sp_client if sp_client is not None else get_spotify_client(user)
     items = []
 
     # Strategy 1: Targeted field search
@@ -188,24 +174,20 @@ def match_youtube_track_to_spotify(user, track: dict) -> dict | None:
             query = f"track:{cleaned_title} artist:{cleaned_artist}"
             res = sp.search(q=query, type='track', limit=5)
             items = res.get('tracks', {}).get('items', [])
-        except Exception:
-            items = []
+        except Exception as e:
+            logger.warning("Error en búsqueda dirigida de Spotify para '%s': %s", query, e)
 
     # Strategy 2: Broad query fallback
     if not items:
         try:
-            query = f"{cleaned_artist} {cleaned_title}".strip() or cleaned_title
-            res = sp.search(q=query, type='track', limit=5)
+            res = sp.search(q=query_phrase, type='track', limit=5)
             items = res.get('tracks', {}).get('items', [])
-        except Exception:
-            items = []
-
-    if not items:
-        return None
+        except Exception as e:
+            logger.warning("Error en búsqueda amplia de Spotify para '%s': %s", query_phrase, e)
 
     best_match = None
     best_score = -1.0
-    target_phrase = f"{cleaned_artist} {cleaned_title}".lower()
+    target_phrase = query_phrase.lower()
 
     for item in items:
         item_artists = ', '.join(a.get('name', '') for a in item.get('artists', []))
@@ -226,13 +208,12 @@ def match_youtube_track_to_spotify(user, track: dict) -> dict | None:
                 'match_type': 'fuzzy',
             }
 
-    if best_match and best_score >= 0.50:
-        return best_match
+    result = best_match if (best_match and best_score >= MIN_SCORE_SPOTIFY_MATCH) else None
+    cache.set(cache_key, result if result is not None else '__NONE__', timeout=CACHE_TTL_MATCH)
+    return result
 
-    return None
 
-
-def preview_playlist_match(user, source_platform: str, target_platform: str, playlist_id: str, limit: int = 50) -> dict:
+def preview_playlist_match(user, source_platform: str, target_platform: str, playlist_id: str, limit: int = 15) -> dict:
     if source_platform == 'spotify':
         source_tracks = get_spotify_playlist_tracks(user, playlist_id, limit=limit)
     elif source_platform == 'youtube':
@@ -240,14 +221,23 @@ def preview_playlist_match(user, source_platform: str, target_platform: str, pla
     else:
         raise ValueError(f"Plataforma origen no soportada: {source_platform}")
 
+    target_client = None
+    try:
+        if source_platform == 'spotify' and target_platform == 'youtube':
+            target_client = get_youtube_client(user)
+        elif source_platform == 'youtube' and target_platform == 'spotify':
+            target_client = get_spotify_client(user)
+    except Exception as e:
+        logger.warning("No se pudo obtener cliente destino para %s: %s", target_platform, e)
+
     results = []
     matched_count = 0
 
     for track in source_tracks:
         if source_platform == 'spotify' and target_platform == 'youtube':
-            matched = match_spotify_track_to_youtube(user, track)
+            matched = match_spotify_track_to_youtube(user, track, yt_client=target_client)
         elif source_platform == 'youtube' and target_platform == 'spotify':
-            matched = match_youtube_track_to_spotify(user, track)
+            matched = match_youtube_track_to_spotify(user, track, sp_client=target_client)
         else:
             matched = None
 
