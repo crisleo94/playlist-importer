@@ -3,23 +3,26 @@ Django settings for Playlist Importer project.
 """
 
 import os
-import sys
 from pathlib import Path
 from dotenv import load_dotenv
+from django.core.exceptions import ImproperlyConfigured
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
-
-# Add apps folder to Python path
-sys.path.insert(0, str(BASE_DIR / 'apps'))
 
 # Load environment variables
 load_dotenv(BASE_DIR / '.env')
 
 # Quick-start development settings - unsuitable for production
-SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'insecure-dev-key-change-in-production')
+# Invert default: DEBUG is False by default for security
+DEBUG = os.getenv('DJANGO_DEBUG', 'False').lower() in ('true', '1', 't')
 
-DEBUG = os.getenv('DJANGO_DEBUG', 'True').lower() in ('true', '1', 't')
+SECRET_KEY = os.getenv('DJANGO_SECRET_KEY')
+if not SECRET_KEY:
+    if DEBUG:
+        SECRET_KEY = 'django-insecure-dev-only-secret-key-12345'
+    else:
+        raise ImproperlyConfigured("DJANGO_SECRET_KEY environment variable must be set in production (DEBUG=False).")
 
 ALLOWED_HOSTS = [
     host.strip()
