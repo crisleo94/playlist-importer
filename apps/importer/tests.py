@@ -758,6 +758,31 @@ class CeleryImportTaskTests(TestCase):
         job.refresh_from_db()
         self.assertEqual(job.status, ImportJob.STATUS_COMPLETED)
 
+    @patch('apps.importer.tasks.get_youtube_playlist_tracks')
+    @patch('apps.importer.tasks.get_spotify_playlist_tracks')
+    def test_run_playlist_import_fetches_up_to_max_tracks_per_job(self, mock_get_sp_tracks, mock_get_yt_tracks):
+        # TASK-010 AC-5: the per-job track fetch cap was raised from 200 to
+        # MAX_TRACKS_PER_JOB now that a cut-off job can be resumed cheaply
+        # (AC-1/AC-4) instead of reprocessing everything from scratch.
+        from apps.importer.tasks import MAX_TRACKS_PER_JOB
+        self.assertEqual(MAX_TRACKS_PER_JOB, 500)
+
+        mock_get_sp_tracks.return_value = []
+        job_sp_src = ImportJob.objects.create(
+            user=self.user, source_platform='spotify', target_platform='youtube',
+            source_playlist_id='sp_1', source_playlist_name='List', status=ImportJob.STATUS_PENDING,
+        )
+        run_playlist_import(job_sp_src.id)
+        mock_get_sp_tracks.assert_called_once_with(self.user, 'sp_1', limit=MAX_TRACKS_PER_JOB)
+
+        mock_get_yt_tracks.return_value = []
+        job_yt_src = ImportJob.objects.create(
+            user=self.user, source_platform='youtube', target_platform='spotify',
+            source_playlist_id='yt_1', source_playlist_name='List', status=ImportJob.STATUS_PENDING,
+        )
+        run_playlist_import(job_yt_src.id)
+        mock_get_yt_tracks.assert_called_once_with(self.user, 'yt_1', limit=MAX_TRACKS_PER_JOB)
+
     @patch('apps.importer.tasks.add_video_to_youtube_playlist')
     @patch('apps.importer.tasks.create_youtube_playlist')
     @patch('apps.importer.tasks.match_spotify_track_to_youtube')

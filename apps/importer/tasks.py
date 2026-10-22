@@ -24,6 +24,14 @@ from apps.integrations.youtube import (
 
 logger = logging.getLogger(__name__)
 
+# Tope de pistas leídas de la playlist origen por job. Antes de TASK-010
+# (reanudación barata vía historial + cache compartido) 200 ya era
+# optimista para completarse en un solo día según la dirección; ahora que
+# una importación cortada por cuota se puede continuar sin reprocesar lo ya
+# hecho (AC-1/AC-4), subirlo solo agrega margen -- el corte temprano por
+# cuota sigue aplicando igual si se llega a necesitar.
+MAX_TRACKS_PER_JOB = 500
+
 
 @shared_task(bind=True, time_limit=900, soft_time_limit=840)
 def run_playlist_import(self, job_id: int):
@@ -44,9 +52,9 @@ def run_playlist_import(self, job_id: int):
     try:
         # 1. Obtener canciones de la lista origen
         if job.source_platform == ImportJob.PLATFORM_SPOTIFY:
-            source_tracks = get_spotify_playlist_tracks(job.user, job.source_playlist_id, limit=200)
+            source_tracks = get_spotify_playlist_tracks(job.user, job.source_playlist_id, limit=MAX_TRACKS_PER_JOB)
         elif job.source_platform == ImportJob.PLATFORM_YOUTUBE:
-            source_tracks = get_youtube_playlist_tracks(job.user, job.source_playlist_id, limit=200)
+            source_tracks = get_youtube_playlist_tracks(job.user, job.source_playlist_id, limit=MAX_TRACKS_PER_JOB)
         else:
             raise ValueError(f"Plataforma origen inválida: {job.source_platform}")
 
