@@ -147,7 +147,7 @@ class ImporterDashboardTests(TestCase):
         response = self.client.get(reverse('importer:youtube_playlists'))
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Synthwave Nights")
-        self.assertContains(response, "15 temas")
+        self.assertContains(response, "15 pistas")
         self.assertContains(response, "public")
 
     @patch('apps.importer.views.get_user_youtube_playlists')
@@ -199,7 +199,7 @@ class ImporterDashboardTests(TestCase):
         self.assertContains(response, "Bohemian Rhapsody")
         self.assertContains(response, "Queen")
         self.assertContains(response, "GBUM71029604")
-        self.assertContains(response, "Mostrando 1 de 150 temas")
+        self.assertContains(response, "Mostrando 1 de 150 pistas")
 
     @patch('apps.importer.views.get_youtube_playlist_tracks')
     def test_playlist_tracks_modal_youtube(self, mock_get_tracks):
