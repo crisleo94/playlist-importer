@@ -4,7 +4,7 @@
         submitting: false,
         destinationMode: '{{ suggested_target_playlist_id|yesno:"existing,new" }}',
         newPlaylistName: '{{ playlist_name|escapejs }}',
-        selectedPlaylistId: '{{ default_selected_playlist_id|default:"" }}'
+        selectedPlaylistId: '{{ default_selected_playlist_id|default:""|escapejs }}'
      }"
      x-show="open"
      x-transition:enter="transition ease-out duration-200"

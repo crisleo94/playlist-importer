@@ -1236,6 +1236,64 @@ class ImportViewsTests(TestCase):
         self.assertContains(response, "Underground Band")
         self.assertContains(response, "Sin coincidencia")
 
+    def test_import_progress_view_completed_job_hides_resume_button(self):
+        # Regression for the review gap found on TASK-010: forcing the
+        # template's resume-button condition to always-true left every
+        # existing test green, because none of them asserted this at all.
+        self.client.login(username="view_user", password="password123")
+        job = ImportJob.objects.create(
+            user=self.user,
+            source_platform='spotify',
+            target_platform='youtube',
+            source_playlist_id='sp_1',
+            source_playlist_name='Finished Playlist',
+            target_playlist_id='yt_dest_1',
+            total_tracks=15,
+            processed_tracks=15,
+            successful_tracks=15,
+            status=ImportJob.STATUS_COMPLETED,
+        )
+        url = reverse('importer:import_progress', kwargs={'job_id': job.id})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "Continuar importación")
+
+    def test_import_progress_view_partial_with_destination_shows_resume_button(self):
+        self.client.login(username="view_user", password="password123")
+        job = ImportJob.objects.create(
+            user=self.user,
+            source_platform='youtube',
+            target_platform='spotify',
+            source_playlist_id='yt_1',
+            source_playlist_name='Partial Playlist',
+            target_playlist_id='sp_dest_1',
+            total_tracks=10,
+            successful_tracks=8,
+            failed_tracks=2,
+            status=ImportJob.STATUS_PARTIAL,
+        )
+        url = reverse('importer:import_progress', kwargs={'job_id': job.id})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Continuar importación")
+
+    def test_import_progress_view_failed_without_destination_hides_resume_button(self):
+        # A job that failed before ever resolving a target_playlist_id has
+        # nothing to resume into -- the button must not appear.
+        self.client.login(username="view_user", password="password123")
+        job = ImportJob.objects.create(
+            user=self.user,
+            source_platform='spotify',
+            target_platform='youtube',
+            source_playlist_id='sp_1',
+            source_playlist_name='Never Got Started',
+            target_playlist_id='',
+            status=ImportJob.STATUS_FAILED,
+        )
+        url = reverse('importer:import_progress', kwargs={'job_id': job.id})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "Continuar importación")
 
     @patch('apps.importer.views.run_playlist_import.delay')
     def test_start_import_double_submit_prevents_duplicate_job_and_task(self, mock_delay):
@@ -1451,6 +1509,37 @@ class ImportViewsTests(TestCase):
         self.client.post(url)
         self.assertEqual(mock_delay.call_count, 1)
         self.assertEqual(ImportJob.objects.filter(user=self.user).count(), 2)
+
+    @patch('apps.importer.views.run_playlist_import.delay')
+    def test_resume_import_lock_prevents_race_when_held_by_another_request(self, mock_delay):
+        # Unlike test_resume_import_prevents_duplicate_concurrent_resume
+        # (two sequential POSTs through the full view), this simulates true
+        # overlap: pre-acquire the exact lock key the view itself would try
+        # to take, as if another in-flight request already holds it, and
+        # confirm this request backs off instead of racing past the
+        # check-then-create window and creating a duplicate ImportJob /
+        # Celery task for the same destination.
+        self.client.login(username="view_user", password="password123")
+        original_job = ImportJob.objects.create(
+            user=self.user,
+            source_platform='youtube',
+            target_platform='spotify',
+            source_playlist_id='yt_src',
+            source_playlist_name='Big List',
+            target_playlist_id='sp_dest_created',
+            status=ImportJob.STATUS_PARTIAL,
+        )
+        lock_key = f"resume_import_lock:{self.user.id}:youtube:yt_src:spotify:sp_dest_created"
+        cache.set(lock_key, "1", timeout=10)
+        try:
+            url = reverse('importer:resume_import', kwargs={'job_id': original_job.id})
+            response = self.client.post(url)
+
+            self.assertEqual(response.status_code, 200)
+            mock_delay.assert_not_called()
+            self.assertEqual(ImportJob.objects.filter(user=self.user).count(), 1)
+        finally:
+            cache.delete(lock_key)
 
 
 class ImportByUrlTests(TestCase):
