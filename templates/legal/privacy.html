@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+
+{% block title %}Política de Privacidad - Playlist Importer{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl mx-auto prose-sm">
+    <h1 class="text-2xl font-bold text-slate-100 mb-1">Política de Privacidad</h1>
+    <p class="text-xs text-slate-500 mb-8">Última actualización: 22 de octubre de 2026</p>
+
+    <div class="space-y-8 text-sm text-slate-300 leading-relaxed">
+        <section>
+            <h2 class="text-base font-bold text-slate-100 mb-2">1. Introducción</h2>
+            <p>
+                Playlist Importer ("la aplicación", "el servicio") es un proyecto personal e independiente
+                operado por Cristhian Reinoso que permite a los usuarios transferir canciones entre sus
+                propias listas de reproducción de Spotify y YouTube Music. Esta aplicación no está afiliada,
+                respaldada ni patrocinada por Spotify AB ni por Google LLC / YouTube.
+            </p>
+        </section>
+
+        <section>
+            <h2 class="text-base font-bold text-slate-100 mb-2">2. Qué datos recopilamos</h2>
+            <ul class="list-disc pl-5 space-y-1.5">
+                <li><strong>Datos de cuenta:</strong> nombre de usuario y contraseña (almacenada con hash, nunca en texto plano) que creás al registrarte en la aplicación.</li>
+                <li><strong>Credenciales de conexión OAuth:</strong> los tokens de acceso y actualización ("access token" / "refresh token") que Spotify y Google emiten cuando autorizás la conexión, junto con tu nombre de usuario e identificador de cuenta en esa plataforma.</li>
+                <li><strong>Datos de las transferencias:</strong> nombres de listas de reproducción, títulos y artistas de las canciones, y el estado de cada transferencia (exitosa, fallida, omitida), únicamente mientras procesamos la importación que solicitaste.</li>
+            </ul>
+            <p class="mt-2">No recopilamos datos de pago, ubicación, ni utilizamos cookies de rastreo o analítica de terceros.</p>
+        </section>
+
+        <section>
+            <h2 class="text-base font-bold text-slate-100 mb-2">3. Permisos (scopes) que solicitamos</h2>
+            <p class="mb-2">Al conectar tu cuenta, solicitamos únicamente los permisos necesarios para leer y crear listas de reproducción en tu nombre:</p>
+            <p class="font-semibold text-slate-200 text-xs mb-1">Spotify:</p>
+            <ul class="list-disc pl-5 space-y-1 text-xs font-mono text-slate-400">
+                <li>playlist-read-private</li>
+                <li>playlist-read-collaborative</li>
+                <li>playlist-modify-public</li>
+                <li>playlist-modify-private</li>
+            </ul>
+            <p class="font-semibold text-slate-200 text-xs mt-3 mb-1">Google / YouTube:</p>
+            <ul class="list-disc pl-5 space-y-1 text-xs font-mono text-slate-400">
+                <li>https://www.googleapis.com/auth/youtube</li>
+                <li>https://www.googleapis.com/auth/youtube.force-ssl</li>
+                <li>https://www.googleapis.com/auth/userinfo.profile</li>
+            </ul>
+        </section>
+
+        <section>
+            <h2 class="text-base font-bold text-slate-100 mb-2">4. Cómo usamos tus datos</h2>
+            <p>
+                Usamos tus credenciales exclusivamente para leer tus listas de reproducción y canciones, y
+                para crear o modificar listas de reproducción en la plataforma de destino cuando iniciás una
+                transferencia. No usamos tus datos con fines publicitarios, no los vendemos ni los compartimos
+                con terceros distintos de las propias APIs de Spotify y de Google/YouTube, necesarias para
+                ejecutar la función que pediste.
+            </p>
+        </section>
+
+        <section>
+            <h2 class="text-base font-bold text-slate-100 mb-2">5. Seguridad y almacenamiento</h2>
+            <p>
+                Los tokens de acceso y actualización se almacenan cifrados en reposo (cifrado simétrico Fernet)
+                y nunca se exponen en texto plano fuera del proceso que los necesita para hablar con la API
+                correspondiente. Las contraseñas de cuenta se almacenan únicamente como hash mediante el sistema
+                de autenticación de Django. El acceso a tus datos de transferencia requiere haber iniciado sesión
+                en tu cuenta.
+            </p>
+        </section>
+
+        <section>
+            <h2 class="text-base font-bold text-slate-100 mb-2">6. Retención y eliminación de datos</h2>
+            <p>
+                Podés desconectar tu cuenta de Spotify o de YouTube en cualquier momento desde el panel de la
+                aplicación; al hacerlo, eliminamos de inmediato los tokens almacenados para esa plataforma. Si
+                querés eliminar por completo tu cuenta y todo el historial de transferencias asociado, escribinos
+                a la dirección de contacto indicada más abajo y procesaremos el pedido a la brevedad.
+            </p>
+        </section>
+
+        <section>
+            <h2 class="text-base font-bold text-slate-100 mb-2">7. Cookies</h2>
+            <p>
+                Utilizamos únicamente las cookies estrictamente necesarias para el funcionamiento del sitio:
+                la cookie de sesión de Django y la cookie de protección CSRF. No utilizamos cookies de
+                seguimiento ni de analítica de terceros.
+            </p>
+        </section>
+
+        <section>
+            <h2 class="text-base font-bold text-slate-100 mb-2">8. Menores de edad</h2>
+            <p>
+                Este servicio no está dirigido a menores de 13 años y no recopilamos a sabiendas información
+                de menores de esa edad.
+            </p>
+        </section>
+
+        <section>
+            <h2 class="text-base font-bold text-slate-100 mb-2">9. Cambios a esta política</h2>
+            <p>
+                Podemos actualizar esta política ocasionalmente. Si realizamos cambios sustanciales,
+                actualizaremos la fecha indicada al inicio de esta página.
+            </p>
+        </section>
+
+        <section>
+            <h2 class="text-base font-bold text-slate-100 mb-2">10. Contacto</h2>
+            <p>
+                Para consultas sobre privacidad o para solicitar la eliminación de tus datos, escribinos a
+                <a href="mailto:cristianreinoso.mgvc@gmail.com" class="text-emerald-400 hover:underline">cristianreinoso.mgvc@gmail.com</a>.
+            </p>
+        </section>
+    </div>
+</div>
+{% endblock %}
