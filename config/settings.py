@@ -30,6 +30,18 @@ ALLOWED_HOSTS = [
     if host.strip()
 ]
 
+# Behind Cloudflare -> Coolify's reverse proxy, Django only ever sees a plain
+# HTTP connection from the proxy. Trust X-Forwarded-Proto (set by both hops)
+# so request.is_secure() and the CSRF Origin check know the original request
+# was HTTPS; without this every POST behind the proxy fails CSRF verification.
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+
+CSRF_TRUSTED_ORIGINS = [
+    f'https://{host}'
+    for host in ALLOWED_HOSTS
+    if host not in ('localhost', '127.0.0.1')
+]
+
 # Application definition
 INSTALLED_APPS = [
     'django.contrib.admin',
