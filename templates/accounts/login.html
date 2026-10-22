@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+
+{% block title %}Iniciar Sesión — Playlist Importer{% endblock %}
+
+{% block content %}
+<div class="max-w-md mx-auto mt-12 bg-slate-900 border border-slate-800 rounded-2xl p-8 shadow-xl">
+    <h1 class="text-2xl font-bold mb-2">Iniciar Sesión</h1>
+    <p class="text-sm text-slate-400 mb-6">Accede para gestionar tus conexiones y transferir playlists.</p>
+
+    <form method="post" class="space-y-4">
+        {% csrf_token %}
+        {% if form.non_field_errors %}
+            <div class="p-3 rounded-lg bg-rose-950/60 border border-rose-800 text-rose-300 text-sm">
+                {{ form.non_field_errors }}
+            </div>
+        {% endif %}
+
+        <div>
+            <label class="block text-xs font-medium text-slate-300 mb-1.5">Usuario</label>
+            <input type="text" name="username" required autofocus class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3.5 py-2.5 text-slate-100 placeholder-slate-500 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500">
+        </div>
+
+        <div>
+            <label class="block text-xs font-medium text-slate-300 mb-1.5">Contraseña</label>
+            <input type="password" name="password" required class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3.5 py-2.5 text-slate-100 placeholder-slate-500 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500">
+        </div>
+
+        <button type="submit" class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-2.5 rounded-lg transition duration-150 mt-2">
+            Ingresar
+        </button>
+    </form>
+
+    <p class="text-xs text-slate-400 mt-6 text-center">
+        ¿No tienes cuenta? <a href="{% url 'accounts:register' %}" class="text-emerald-400 hover:underline">Regístrate aquí</a>
+    </p>
+</div>
+{% endblock %}

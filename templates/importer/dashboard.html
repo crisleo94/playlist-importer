@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard — Playlist Importer{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Header de Conexiones -->
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-sm">
+        <h2 class="text-lg font-bold mb-1">Cuentas Vinculadas</h2>
+        <p class="text-xs text-slate-400 mb-6">Conecta ambas plataformas para habilitar la sincronización e importación bidireccional.</p>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <!-- Spotify Card -->
+            <div class="p-5 rounded-xl border {% if spotify_token %}bg-emerald-950/20 border-emerald-800/50{% else %}bg-slate-950/60 border-slate-800{% endif %} flex items-center justify-between">
+                <div class="flex items-center gap-4">
+                    <div class="w-12 h-12 rounded-xl bg-[#1DB954]/20 border border-[#1DB954]/40 flex items-center justify-center text-2xl text-[#1DB954]">
+                        🟢
+                    </div>
+                    <div>
+                        <div class="flex items-center gap-2">
+                            <h3 class="font-bold text-sm">Spotify</h3>
+                            {% if spotify_token %}
+                                <span class="text-[10px] bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 px-2 py-0.5 rounded-full font-medium">Conectado</span>
+                            {% else %}
+                                <span class="text-[10px] bg-slate-800 text-slate-400 border border-slate-700 px-2 py-0.5 rounded-full font-medium">No conectado</span>
+                            {% endif %}
+                        </div>
+                        <p class="text-xs text-slate-400 mt-0.5">
+                            {% if spotify_token %}
+                                Usuario: <span class="text-slate-200 font-medium">{{ spotify_token.platform_username|default:"Conectado" }}</span>
+                            {% else %}
+                                Requiere autorización de lectura y escritura
+                            {% endif %}
+                        </p>
+                    </div>
+                </div>
+
+                <div>
+                    {% if spotify_token %}
+                        <form method="post" action="{% url 'integrations:spotify_disconnect' %}">
+                            {% csrf_token %}
+                            <button type="submit" class="text-xs bg-rose-950/50 hover:bg-rose-900/60 text-rose-300 border border-rose-800/60 px-3.5 py-2 rounded-lg transition font-medium">
+                                Desconectar
+                            </button>
+                        </form>
+                    {% else %}
+                        <a href="{% url 'integrations:spotify_connect' %}" class="inline-flex items-center gap-1.5 text-xs bg-[#1DB954] hover:bg-[#1aa34a] text-black font-bold px-4 py-2 rounded-lg transition shadow-md shadow-[#1DB954]/10">
+                            Conectar Spotify
+                        </a>
+                    {% endif %}
+                </div>
+            </div>
+
+            <!-- YouTube Music Card -->
+            <div class="p-5 rounded-xl border {% if youtube_token %}bg-rose-950/20 border-rose-800/50{% else %}bg-slate-950/60 border-slate-800{% endif %} flex items-center justify-between">
+                <div class="flex items-center gap-4">
+                    <div class="w-12 h-12 rounded-xl bg-red-600/20 border border-red-600/40 flex items-center justify-center text-2xl text-red-500">
+                        🔴
+                    </div>
+                    <div>
+                        <div class="flex items-center gap-2">
+                            <h3 class="font-bold text-sm">YouTube Music</h3>
+                            {% if youtube_token %}
+                                <span class="text-[10px] bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 px-2 py-0.5 rounded-full font-medium">Conectado</span>
+                            {% else %}
+                                <span class="text-[10px] bg-slate-800 text-slate-400 border border-slate-700 px-2 py-0.5 rounded-full font-medium">No conectado</span>
+                            {% endif %}
+                        </div>
+                        <p class="text-xs text-slate-400 mt-0.5">
+                            {% if youtube_token %}
+                                Canal: <span class="text-slate-200 font-medium">{{ youtube_token.platform_username|default:"Conectado" }}</span>
+                            {% else %}
+                                Requiere autorización de YouTube Data API v3
+                            {% endif %}
+                        </p>
+                    </div>
+                </div>
+
+                <div>
+                    {% if youtube_token %}
+                        <form method="post" action="{% url 'integrations:youtube_disconnect' %}">
+                            {% csrf_token %}
+                            <button type="submit" class="text-xs bg-rose-950/50 hover:bg-rose-900/60 text-rose-300 border border-rose-800/60 px-3.5 py-2 rounded-lg transition font-medium">
+                                Desconectar
+                            </button>
+                        </form>
+                    {% else %}
+                        <a href="{% url 'integrations:youtube_connect' %}" class="inline-flex items-center gap-1.5 text-xs bg-red-600 hover:bg-red-500 text-white font-bold px-4 py-2 rounded-lg transition shadow-md shadow-red-600/20">
+                            Conectar YouTube
+                        </a>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Comparativa Placeholder (se expandirá en TASK-003) -->
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 min-h-[300px] flex flex-col justify-between">
+            <div>
+                <div class="flex items-center justify-between pb-4 border-b border-slate-800 mb-4">
+                    <h3 class="font-bold flex items-center gap-2 text-sm text-emerald-400">
+                        <span>🟢</span> Playlists de Spotify
+                    </h3>
+                </div>
+                <div class="text-center py-12 text-slate-500 text-xs">
+                    {% if spotify_token %}
+                        Cargando playlists en la siguiente fase (TASK-003)...
+                    {% else %}
+                        Conecta tu cuenta de Spotify para ver tus playlists aquí.
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 min-h-[300px] flex flex-col justify-between">
+            <div>
+                <div class="flex items-center justify-between pb-4 border-b border-slate-800 mb-4">
+                    <h3 class="font-bold flex items-center gap-2 text-sm text-red-400">
+                        <span>🔴</span> Playlists de YouTube Music
+                    </h3>
+                </div>
+                <div class="text-center py-12 text-slate-500 text-xs">
+                    {% if youtube_token %}
+                        Cargando playlists en la siguiente fase (TASK-003)...
+                    {% else %}
+                        Conecta tu cuenta de YouTube para ver tus playlists aquí.
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
