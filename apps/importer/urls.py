@@ -13,4 +13,5 @@ urlpatterns = [
     path('import/url/', views.import_by_url_view, name='import_by_url'),
     path('import/start/', views.start_import_view, name='start_import'),
     path('import/<int:job_id>/progress/', views.import_progress_view, name='import_progress'),
+    path('import/<int:job_id>/resume/', views.resume_import_view, name='resume_import'),
 ]

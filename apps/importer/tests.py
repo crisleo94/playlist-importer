@@ -1147,6 +1147,144 @@ class ImportViewsTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Fallo de inserción")
 
+    def test_resume_import_requires_login(self):
+        job = ImportJob.objects.create(
+            user=self.user,
+            source_platform='youtube',
+            target_platform='spotify',
+            source_playlist_id='yt_1',
+            source_playlist_name='List',
+            target_playlist_id='sp_dest',
+            status=ImportJob.STATUS_PARTIAL,
+        )
+        url = reverse('importer:resume_import', kwargs={'job_id': job.id})
+        response = self.client.post(url)
+        self.assertEqual(response.status_code, 302)
+
+    def test_resume_import_requires_post(self):
+        self.client.login(username="view_user", password="password123")
+        job = ImportJob.objects.create(
+            user=self.user,
+            source_platform='youtube',
+            target_platform='spotify',
+            source_playlist_id='yt_1',
+            source_playlist_name='List',
+            target_playlist_id='sp_dest',
+            status=ImportJob.STATUS_PARTIAL,
+        )
+        url = reverse('importer:resume_import', kwargs={'job_id': job.id})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 405)
+
+    def test_resume_import_cross_user_forbidden(self):
+        other_user = User.objects.create_user(username="other_resume_user", password="password123")
+        job = ImportJob.objects.create(
+            user=other_user,
+            source_platform='youtube',
+            target_platform='spotify',
+            source_playlist_id='yt_1',
+            source_playlist_name='List',
+            target_playlist_id='sp_dest',
+            status=ImportJob.STATUS_PARTIAL,
+        )
+        self.client.login(username="view_user", password="password123")
+        url = reverse('importer:resume_import', kwargs={'job_id': job.id})
+        response = self.client.post(url)
+        self.assertEqual(response.status_code, 404)
+
+    def test_resume_import_completed_job_does_not_create_new_job(self):
+        self.client.login(username="view_user", password="password123")
+        job = ImportJob.objects.create(
+            user=self.user,
+            source_platform='youtube',
+            target_platform='spotify',
+            source_playlist_id='yt_1',
+            source_playlist_name='List',
+            target_playlist_id='sp_dest',
+            total_tracks=10,
+            successful_tracks=10,
+            status=ImportJob.STATUS_COMPLETED,
+        )
+        url = reverse('importer:resume_import', kwargs={'job_id': job.id})
+        response = self.client.post(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(ImportJob.objects.filter(user=self.user).count(), 1)
+
+    def test_resume_import_without_target_playlist_id_shows_error(self):
+        self.client.login(username="view_user", password="password123")
+        job = ImportJob.objects.create(
+            user=self.user,
+            source_platform='youtube',
+            target_platform='spotify',
+            source_playlist_id='yt_1',
+            source_playlist_name='List',
+            target_playlist_id='',
+            status=ImportJob.STATUS_FAILED,
+        )
+        url = reverse('importer:resume_import', kwargs={'job_id': job.id})
+        response = self.client.post(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "no llegó a registrar una playlist de destino")
+        self.assertEqual(ImportJob.objects.filter(user=self.user).count(), 1)
+
+    @patch('apps.importer.views.run_playlist_import.delay')
+    def test_resume_import_partial_creates_chained_job(self, mock_delay):
+        self.client.login(username="view_user", password="password123")
+        mock_delay.return_value = MagicMock(id='resume_task_uuid')
+
+        original_job = ImportJob.objects.create(
+            user=self.user,
+            source_platform='youtube',
+            target_platform='spotify',
+            source_playlist_id='yt_src',
+            source_playlist_name='Big List',
+            destination_mode='new',
+            target_playlist_id='sp_dest_created',
+            target_playlist_name='Big List (Imported)',
+            total_tracks=300,
+            successful_tracks=100,
+            failed_tracks=1,
+            status=ImportJob.STATUS_PARTIAL,
+        )
+
+        url = reverse('importer:resume_import', kwargs={'job_id': original_job.id})
+        response = self.client.post(url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Continuación")
+
+        resume_job = ImportJob.objects.filter(user=self.user).exclude(id=original_job.id).first()
+        self.assertIsNotNone(resume_job)
+        self.assertEqual(resume_job.resumed_from_id, original_job.id)
+        self.assertEqual(resume_job.destination_mode, ImportJob.DEST_MODE_EXISTING)
+        self.assertEqual(resume_job.target_playlist_id, 'sp_dest_created')
+        self.assertEqual(resume_job.source_playlist_id, 'yt_src')
+        mock_delay.assert_called_once_with(resume_job.id)
+
+    @patch('apps.importer.views.run_playlist_import.delay')
+    def test_resume_import_prevents_duplicate_concurrent_resume(self, mock_delay):
+        self.client.login(username="view_user", password="password123")
+        mock_delay.return_value = MagicMock(id='resume_task_uuid')
+
+        original_job = ImportJob.objects.create(
+            user=self.user,
+            source_platform='youtube',
+            target_platform='spotify',
+            source_playlist_id='yt_src',
+            source_playlist_name='Big List',
+            target_playlist_id='sp_dest_created',
+            status=ImportJob.STATUS_PARTIAL,
+        )
+
+        url = reverse('importer:resume_import', kwargs={'job_id': original_job.id})
+        self.client.post(url)
+        self.assertEqual(mock_delay.call_count, 1)
+
+        # Resuming again before the first resume job finishes must not create a second one
+        self.client.post(url)
+        self.assertEqual(mock_delay.call_count, 1)
+        self.assertEqual(ImportJob.objects.filter(user=self.user).count(), 2)
+
 
 class ImportByUrlTests(TestCase):
     def setUp(self):
