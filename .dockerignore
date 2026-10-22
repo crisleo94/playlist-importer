@@ -11,3 +11,4 @@ db.sqlite3-journal
 .env.local
 .DS_Store
 Thumbs.db
+staticfiles/

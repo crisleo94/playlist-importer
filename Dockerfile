@@ -21,10 +21,12 @@ RUN uv sync --frozen --no-dev
 # ==========================================
 FROM python:3.12-slim-bookworm AS runtime
 
-# Install system runtime libraries (libpq for PostgreSQL, curl for health checks)
+# Install system runtime libraries (libpq for PostgreSQL, curl for health checks,
+# gosu to drop root privileges after fixing volume permissions at startup)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     libpq5 \
+    gosu \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user
@@ -36,6 +38,7 @@ WORKDIR /app
 # Copy virtualenv and code from builder
 COPY --from=builder --chown=appuser:appuser /app/.venv /app/.venv
 COPY --chown=appuser:appuser . /app
+RUN chmod +x /app/docker-entrypoint.sh
 
 # Set runtime environment
 ENV PATH="/app/.venv/bin:$PATH" \
@@ -43,9 +46,10 @@ ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1 \
     DOCKER_CONTAINER=true
 
-# Switch to unprivileged user
-USER appuser
-
+# Stay as root at container start: the entrypoint fixes ownership of any
+# volume mounted over /app/staticfiles (fresh volumes are created root-owned,
+# which shadows the --chown above) before dropping to appuser via gosu.
 EXPOSE 8000
 
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "3", "--timeout", "120", "config.wsgi:application"]
