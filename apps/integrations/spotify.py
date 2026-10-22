@@ -127,6 +127,20 @@ def get_user_spotify_playlists(user, search_query: str = '', max_playlists: int 
     return playlists
 
 
+def get_spotify_playlist_details(user, playlist_id: str) -> dict:
+    sp = get_spotify_client(user)
+    playlist = sp.playlist(playlist_id, fields='id,name,description,images,tracks.total')
+    images = playlist.get('images') or []
+    image_url = images[0].get('url') if images else None
+    return {
+        'id': playlist.get('id', playlist_id),
+        'name': playlist.get('name') or 'Playlist de Spotify',
+        'description': playlist.get('description') or '',
+        'total_tracks': playlist.get('tracks', {}).get('total', 0),
+        'image_url': image_url,
+    }
+
+
 def get_spotify_playlist_tracks(user, playlist_id: str, limit: int = 100) -> list[dict]:
     sp = get_spotify_client(user)
     tracks = []

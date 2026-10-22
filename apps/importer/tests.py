@@ -147,7 +147,7 @@ class ImporterDashboardTests(TestCase):
         response = self.client.get(reverse('importer:youtube_playlists'))
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Synthwave Nights")
-        self.assertContains(response, "15 temas")
+        self.assertContains(response, "15 pistas")
         self.assertContains(response, "public")
 
     @patch('apps.importer.views.get_user_youtube_playlists')
@@ -199,7 +199,7 @@ class ImporterDashboardTests(TestCase):
         self.assertContains(response, "Bohemian Rhapsody")
         self.assertContains(response, "Queen")
         self.assertContains(response, "GBUM71029604")
-        self.assertContains(response, "Mostrando 1 de 150 temas")
+        self.assertContains(response, "Mostrando 1 de 150 pistas")
 
     @patch('apps.importer.views.get_youtube_playlist_tracks')
     def test_playlist_tracks_modal_youtube(self, mock_get_tracks):
@@ -1012,3 +1012,270 @@ class ImportViewsTests(TestCase):
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Fallo de inserción")
+
+
+class ImportByUrlTests(TestCase):
+    def setUp(self):
+        cache.clear()
+        self.client = Client()
+        self.user = User.objects.create_user(username="url_user", password="password123")
+        self.client.login(username="url_user", password="password123")
+
+    def tearDown(self):
+        cache.clear()
+
+    def test_import_by_url_modal_view_renders(self):
+        url = reverse('importer:import_by_url_modal')
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Cargar Playlist por Enlace o ID")
+
+    def test_import_by_url_invalid_input(self):
+        url = reverse('importer:import_by_url')
+        response = self.client.post(url, {'playlist_url': 'invalid_string'})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "No pudimos reconocer el enlace o ID")
+
+    def test_import_by_url_missing_source_token(self):
+        url = reverse('importer:import_by_url')
+        # Spotify valid ID without Spotify token connected
+        response = self.client.post(url, {'playlist_url': '37i9dQZF1DXcBWIGoYBM5M'})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Debes conectar tu cuenta de Spotify")
+
+    def test_import_by_url_missing_target_token(self):
+        # Connect source token (Spotify) but no target token (YouTube)
+        PlatformToken.objects.create(
+            user=self.user,
+            platform=PlatformToken.PLATFORM_SPOTIFY,
+            platform_username="spotify_tester"
+        )
+        url = reverse('importer:import_by_url')
+        response = self.client.post(url, {'playlist_url': 'https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M?si=123'})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Debes conectar tu cuenta de YouTube Music")
+
+    @patch('apps.importer.views.get_spotify_playlist_details')
+    @patch('apps.importer.views.preview_playlist_match')
+    @patch('apps.importer.views.get_user_youtube_playlists')
+    def test_import_by_url_spotify_success(self, mock_get_yt_pl, mock_preview, mock_details):
+        PlatformToken.objects.create(user=self.user, platform=PlatformToken.PLATFORM_SPOTIFY)
+        PlatformToken.objects.create(user=self.user, platform=PlatformToken.PLATFORM_YOUTUBE)
+
+        mock_details.return_value = {'name': 'Shared Chill List'}
+        mock_get_yt_pl.return_value = [{'id': 'yt_1', 'name': 'My YT Dest'}]
+        mock_preview.return_value = {
+            'source_platform': 'spotify',
+            'target_platform': 'youtube',
+            'playlist_id': '37i9dQZF1DXcBWIGoYBM5M',
+            'total_tracks': 1,
+            'matched_count': 1,
+            'unmatched_count': 0,
+            'match_rate': 100.0,
+            'items': [
+                {
+                    'source': {'title': 'Track A', 'artist': 'Artist A'},
+                    'target': {'title': 'Track A YT', 'score': 0.95},
+                    'is_matched': True,
+                }
+            ],
+        }
+
+        url = reverse('importer:import_by_url')
+        response = self.client.post(url, {'playlist_url': 'https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M'})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Shared Chill List")
+        self.assertContains(response, "Track A")
+        self.assertContains(response, "Iniciar Transferencia")
+
+    @patch('apps.importer.views.get_youtube_playlist_details')
+    @patch('apps.importer.views.preview_playlist_match')
+    @patch('apps.importer.views.get_user_spotify_playlists')
+    def test_import_by_url_youtube_success(self, mock_get_sp_pl, mock_preview, mock_details):
+        PlatformToken.objects.create(user=self.user, platform=PlatformToken.PLATFORM_SPOTIFY)
+        PlatformToken.objects.create(user=self.user, platform=PlatformToken.PLATFORM_YOUTUBE)
+
+        mock_details.return_value = {'name': 'Collab YT Party'}
+        mock_get_sp_pl.return_value = [{'id': 'sp_1', 'name': 'My SP Dest'}]
+        mock_preview.return_value = {
+            'source_platform': 'youtube',
+            'target_platform': 'spotify',
+            'playlist_id': 'PLMC9KNkIncKtPzgY-5rmhvj7fax8fdxoj',
+            'total_tracks': 1,
+            'matched_count': 1,
+            'unmatched_count': 0,
+            'match_rate': 100.0,
+            'items': [
+                {
+                    'source': {'title': 'Video B', 'artist': 'Channel B'},
+                    'target': {'title': 'Track B', 'score': 0.90},
+                    'is_matched': True,
+                }
+            ],
+        }
+
+        url = reverse('importer:import_by_url')
+        response = self.client.post(url, {'playlist_url': 'https://music.youtube.com/playlist?list=PLMC9KNkIncKtPzgY-5rmhvj7fax8fdxoj&si=tracker'})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Collab YT Party")
+        self.assertContains(response, "Video B")
+        self.assertContains(response, "Iniciar Transferencia")
+
+
+class QuotaAndRateLimitTests(TestCase):
+    def setUp(self):
+        cache.clear()
+        self.user = User.objects.create_user(username="quota_user", password="password123")
+        token_sp = PlatformToken.objects.create(
+            user=self.user,
+            platform=PlatformToken.PLATFORM_SPOTIFY,
+            platform_username="spot_user"
+        )
+        token_sp.set_access_token("valid_sp_token")
+        token_sp.save()
+
+        token_yt = PlatformToken.objects.create(
+            user=self.user,
+            platform=PlatformToken.PLATFORM_YOUTUBE,
+            platform_username="yt_user"
+        )
+        token_yt.set_access_token("valid_yt_token")
+        token_yt.save()
+
+    def tearDown(self):
+        cache.clear()
+
+    def test_is_quota_or_rate_limit_error_detection(self):
+        from apps.importer.matcher import is_quota_or_rate_limit_error, QuotaOrRateLimitExceeded
+
+        # 1. Custom QuotaOrRateLimitExceeded
+        self.assertTrue(is_quota_or_rate_limit_error(QuotaOrRateLimitExceeded('spotify', '429 error')))
+
+        # 2. SpotifyException structured attribute http_status=429
+        mock_spotipy_exc = Exception("Rate limit reached")
+        mock_spotipy_exc.http_status = 429
+        self.assertTrue(is_quota_or_rate_limit_error(mock_spotipy_exc))
+
+        # 3. Google HttpError structured attribute resp.status=403 with quota reason
+        mock_resp = MagicMock(status=403)
+        mock_google_exc = Exception("<HttpError 403: 'quotaExceeded'>")
+        mock_google_exc.resp = mock_resp
+        self.assertTrue(is_quota_or_rate_limit_error(mock_google_exc))
+
+        # 4. Text fallback
+        self.assertTrue(is_quota_or_rate_limit_error(Exception("user_rate_limit_exceeded")))
+        self.assertTrue(is_quota_or_rate_limit_error(Exception("Error 429: Too Many Requests")))
+
+        # 5. Normal exception should return False
+        self.assertFalse(is_quota_or_rate_limit_error(ValueError("Invalid track name")))
+        self.assertFalse(is_quota_or_rate_limit_error(KeyError("missing key")))
+
+    @patch('apps.importer.matcher.get_spotify_client')
+    def test_match_youtube_track_raises_quota_on_429(self, mock_sp_client):
+        from apps.importer.matcher import match_youtube_track_to_spotify, QuotaOrRateLimitExceeded
+
+        mock_sp = MagicMock()
+        mock_exc = Exception("Spotify rate limit")
+        mock_exc.http_status = 429
+        mock_sp.search.side_effect = mock_exc
+        mock_sp_client.return_value = mock_sp
+
+        track = {'title': 'Song A', 'artist': 'Artist A'}
+        with self.assertRaises(QuotaOrRateLimitExceeded):
+            match_youtube_track_to_spotify(self.user, track, sp_client=mock_sp)
+
+    @patch('apps.importer.matcher.get_youtube_client')
+    def test_match_spotify_track_raises_quota_on_quota_exceeded(self, mock_yt_client):
+        from apps.importer.matcher import match_spotify_track_to_youtube, QuotaOrRateLimitExceeded
+
+        mock_yt = MagicMock()
+        mock_exc = Exception("The request cannot be completed because quotaExceeded has occurred.")
+        mock_exc.resp = MagicMock(status=403)
+        mock_yt.search().list().execute.side_effect = mock_exc
+        mock_yt_client.return_value = mock_yt
+
+        track = {'title': 'Song B', 'artist': 'Artist B'}
+        with self.assertRaises(QuotaOrRateLimitExceeded):
+            match_spotify_track_to_youtube(self.user, track, yt_client=mock_yt)
+
+    @patch('apps.importer.tasks.get_spotify_client')
+    @patch('apps.importer.tasks.create_spotify_playlist')
+    @patch('apps.importer.tasks.get_youtube_playlist_tracks')
+    @patch('apps.importer.tasks.match_youtube_track_to_spotify')
+    def test_run_playlist_import_search_quota_exceeded_aborts_early(self, mock_match, mock_get_tracks, mock_create_pl, mock_get_client):
+        mock_create_pl.return_value = {'id': 'created_sp_id', 'name': 'SP List'}
+        from apps.importer.tasks import run_playlist_import
+        from apps.importer.matcher import QuotaOrRateLimitExceeded
+
+        # 5 tracks in source playlist
+        mock_get_tracks.return_value = [
+            {'id': f't_{i}', 'title': f'Song {i}', 'artist': f'Artist {i}'}
+            for i in range(5)
+        ]
+
+        # First track throws QuotaOrRateLimitExceeded
+        mock_match.side_effect = QuotaOrRateLimitExceeded('spotify', 'Spotify rate limit 429')
+
+        job = ImportJob.objects.create(
+            user=self.user,
+            source_platform=ImportJob.PLATFORM_YOUTUBE,
+            target_platform=ImportJob.PLATFORM_SPOTIFY,
+            source_playlist_id='yt_list_123',
+            source_playlist_name='YT Big List',
+            status=ImportJob.STATUS_PENDING,
+        )
+
+        run_playlist_import(job.id)
+        job.refresh_from_db()
+
+        # Crucial: Must stop after 1 track, NOT burn all 5 tracks!
+        self.assertEqual(job.processed_tracks, 1)
+        self.assertEqual(job.successful_tracks, 0)
+        self.assertEqual(job.failed_tracks, 1)
+        self.assertIn("Límite de cuota", job.error_message)
+        self.assertEqual(job.status, ImportJob.STATUS_FAILED)
+
+        item = job.items.first()
+        self.assertIsNotNone(item)
+        self.assertTrue(item.is_quota_error)
+        self.assertIn("Límite de cuota", item.error_message)
+
+    @patch('apps.importer.tasks.get_youtube_client')
+    @patch('apps.importer.tasks.create_youtube_playlist')
+    @patch('apps.importer.tasks.get_spotify_playlist_tracks')
+    @patch('apps.importer.tasks.match_spotify_track_to_youtube')
+    @patch('apps.importer.tasks.add_video_to_youtube_playlist')
+    def test_run_playlist_import_insert_quota_exceeded_aborts_early(self, mock_add_video, mock_match, mock_get_tracks, mock_create_pl, mock_get_client):
+        mock_create_pl.return_value = {'id': 'created_yt_id', 'name': 'YT List'}
+        from apps.importer.tasks import run_playlist_import
+
+        mock_get_tracks.return_value = [
+            {'id': f'sp_{i}', 'title': f'Song {i}', 'artist': f'Artist {i}'}
+            for i in range(4)
+        ]
+        mock_match.return_value = {'id': 'yt_vid_1', 'title': 'Matched Title', 'artist': 'Artist'}
+
+        mock_exc = Exception("quotaExceeded: Daily limit exceeded")
+        mock_exc.resp = MagicMock(status=403)
+        mock_add_video.side_effect = mock_exc
+
+        job = ImportJob.objects.create(
+            user=self.user,
+            source_platform=ImportJob.PLATFORM_SPOTIFY,
+            target_platform=ImportJob.PLATFORM_YOUTUBE,
+            source_playlist_id='sp_list_123',
+            source_playlist_name='SP List',
+            status=ImportJob.STATUS_PENDING,
+        )
+
+        run_playlist_import(job.id)
+        job.refresh_from_db()
+
+        self.assertEqual(job.processed_tracks, 1)
+        self.assertEqual(job.successful_tracks, 0)
+        self.assertEqual(job.failed_tracks, 1)
+        self.assertIn("Límite de cuota", job.error_message)
+
+        item = job.items.first()
+        self.assertIsNotNone(item)
+        self.assertTrue(item.is_quota_error)

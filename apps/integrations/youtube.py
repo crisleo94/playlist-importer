@@ -190,6 +190,33 @@ def get_user_youtube_playlists(user, search_query: str = '', max_playlists: int 
     return playlists
 
 
+def get_youtube_playlist_details(user, playlist_id: str) -> dict:
+    yt = get_youtube_client(user)
+    response = yt.playlists().list(
+        part='snippet,contentDetails',
+        id=playlist_id,
+        maxResults=1
+    ).execute()
+    items = response.get('items', [])
+    if not items:
+        return {
+            'id': playlist_id,
+            'name': 'Playlist de YouTube',
+            'description': '',
+            'total_tracks': 0,
+            'image_url': None,
+        }
+    snippet = items[0].get('snippet', {})
+    content_details = items[0].get('contentDetails', {})
+    return {
+        'id': playlist_id,
+        'name': snippet.get('title') or 'Playlist de YouTube',
+        'description': snippet.get('description') or '',
+        'total_tracks': content_details.get('itemCount', 0),
+        'image_url': _pick_thumbnail(snippet.get('thumbnails', {})),
+    }
+
+
 def get_youtube_playlist_tracks(user, playlist_id: str, limit: int = 100) -> list[dict]:
     yt = get_youtube_client(user)
     tracks = []

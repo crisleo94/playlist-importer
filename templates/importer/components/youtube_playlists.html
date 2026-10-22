@@ -46,7 +46,7 @@
                             </h4>
                             <div class="flex items-center gap-2 text-[11px] text-slate-400 mt-0.5">
                                 <span class="bg-slate-900 text-slate-300 px-2 py-0.5 rounded border border-slate-800">
-                                    {{ pl.total_tracks }} temas
+                                    {{ pl.total_tracks }} pistas
                                 </span>
                                 <span class="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded {% if pl.privacy_status == 'public' %}bg-emerald-950/50 text-emerald-400 border border-emerald-800/40{% elif pl.privacy_status == 'private' %}bg-amber-950/50 text-amber-400 border border-amber-800/40{% else %}bg-slate-900 text-slate-400 border border-slate-800{% endif %}">
                                     {{ pl.privacy_status }}
@@ -63,7 +63,7 @@
                         {% endif %}
 
                         <button hx-get="{% url 'importer:playlist_tracks_modal' platform='youtube' playlist_id=pl.id %}?name={{ pl.name|urlencode }}&total={{ pl.total_tracks }}" hx-target="#modal-container" class="px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white text-xs border border-slate-800 transition">
-                            Ver temas
+                            Ver pistas
                         </button>
 
                         <button hx-get="{% url 'importer:preview_match' source_platform='youtube' playlist_id=pl.id %}?name={{ pl.name|urlencode }}" hx-target="#modal-container" title="Transferir hacia Spotify" class="px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-500 text-white font-medium text-xs transition flex items-center gap-1 shadow-sm shadow-red-950">

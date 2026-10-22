@@ -46,7 +46,7 @@
                             </h4>
                             <div class="flex items-center gap-2 text-[11px] text-slate-400 mt-0.5">
                                 <span class="bg-slate-900 text-slate-300 px-2 py-0.5 rounded border border-slate-800">
-                                    {{ pl.total_tracks }} temas
+                                    {{ pl.total_tracks }} pistas
                                 </span>
                                 <span class="truncate">por {{ pl.owner_name }}</span>
                             </div>
@@ -61,7 +61,7 @@
                         {% endif %}
 
                         <button hx-get="{% url 'importer:playlist_tracks_modal' platform='spotify' playlist_id=pl.id %}?name={{ pl.name|urlencode }}&total={{ pl.total_tracks }}" hx-target="#modal-container" class="px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white text-xs border border-slate-800 transition">
-                            Ver temas
+                            Ver pistas
                         </button>
 
                         <button hx-get="{% url 'importer:preview_match' source_platform='spotify' playlist_id=pl.id %}?name={{ pl.name|urlencode }}" hx-target="#modal-container" title="Transferir hacia YouTube Music" class="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-xs transition flex items-center gap-1 shadow-sm shadow-emerald-950">

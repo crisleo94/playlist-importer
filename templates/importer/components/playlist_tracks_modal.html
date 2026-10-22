@@ -21,7 +21,7 @@
                     <h3 class="font-bold text-base text-slate-100 truncate">{{ playlist_name }}</h3>
                     <p class="text-xs text-slate-400">
                         {% if total_tracks and total_tracks > tracks|length %}
-                            Mostrando {{ tracks|length }} de {{ total_tracks }} temas en {{ platform|title }}
+                            Mostrando {{ tracks|length }} de {{ total_tracks }} pistas en {{ platform|title }}
                         {% else %}
                             {{ tracks|length }} canciones en {{ platform|title }}
                         {% endif %}

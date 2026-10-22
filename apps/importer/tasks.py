@@ -5,6 +5,8 @@ from celery.exceptions import SoftTimeLimitExceeded
 from apps.importer.matcher import (
     match_spotify_track_to_youtube,
     match_youtube_track_to_spotify,
+    QuotaOrRateLimitExceeded,
+    is_quota_or_rate_limit_error,
 )
 from apps.importer.models import ImportJob, ImportJobItem
 from apps.integrations.spotify import (
@@ -86,11 +88,34 @@ def run_playlist_import(self, job_id: int):
             job.current_track_name = track_title
             job.save(update_fields=['current_track_name', 'updated_at'])
 
-            matched = None
-            if job.source_platform == ImportJob.PLATFORM_SPOTIFY and job.target_platform == ImportJob.PLATFORM_YOUTUBE:
-                matched = match_spotify_track_to_youtube(job.user, track, yt_client=target_client)
-            elif job.source_platform == ImportJob.PLATFORM_YOUTUBE and job.target_platform == ImportJob.PLATFORM_SPOTIFY:
-                matched = match_youtube_track_to_spotify(job.user, track, sp_client=target_client)
+            try:
+                matched = None
+                if job.source_platform == ImportJob.PLATFORM_SPOTIFY and job.target_platform == ImportJob.PLATFORM_YOUTUBE:
+                    matched = match_spotify_track_to_youtube(job.user, track, yt_client=target_client)
+                elif job.source_platform == ImportJob.PLATFORM_YOUTUBE and job.target_platform == ImportJob.PLATFORM_SPOTIFY:
+                    time.sleep(0.08)
+                    matched = match_youtube_track_to_spotify(job.user, track, sp_client=target_client)
+            except Exception as e:
+                if is_quota_or_rate_limit_error(e):
+                    target_name = "YouTube Music" if job.target_platform == ImportJob.PLATFORM_YOUTUBE else "Spotify"
+                    job.error_message = f"Límite de cuota o peticiones de {target_name} alcanzado. Se detuvo la transferencia para proteger la cuenta."
+                    item = ImportJobItem.objects.create(
+                        job=job,
+                        source_track_id=track.get('id', ''),
+                        source_title=track_title,
+                        source_artist=track_artist,
+                        source_isrc=track.get('isrc', ''),
+                        status=ImportJobItem.STATUS_FAILED,
+                        error_message=f"Límite de cuota de {target_name} alcanzado",
+                        is_quota_error=True,
+                    )
+                    job.failed_tracks += 1
+                    job.processed_tracks += 1
+                    job.save(update_fields=['processed_tracks', 'successful_tracks', 'failed_tracks', 'error_message', 'updated_at'])
+                    break
+                else:
+                    logger.warning("Error inesperado en emparejamiento de pista '%s': %s", track_title, e)
+                    matched = None
 
             if matched:
                 item = ImportJobItem.objects.create(
@@ -119,13 +144,21 @@ def run_playlist_import(self, job_id: int):
                         )
                         item.status = ImportJobItem.STATUS_ADDED
                         job.successful_tracks += 1
-                        time.sleep(0.15)  # Pausa de cortesía para control de rate limits
+                        time.sleep(0.15)
+                        item.save(update_fields=['status'])
                     except Exception as e:
                         logger.warning("Error al insertar video en YouTube playlist: %s", e)
+                        is_quota = is_quota_or_rate_limit_error(e)
                         item.status = ImportJobItem.STATUS_FAILED
-                        item.error_message = str(e)
+                        item.error_message = "Límite de cuota diaria de YouTube alcanzado" if is_quota else str(e)
+                        item.is_quota_error = is_quota
+                        item.save(update_fields=['status', 'error_message', 'is_quota_error'])
                         job.failed_tracks += 1
-                    item.save(update_fields=['status', 'error_message'])
+                        if is_quota:
+                            job.error_message = "Límite de cuota diaria de YouTube Music alcanzado (Google Cloud). Se detuvo la transferencia para proteger la cuenta."
+                            job.processed_tracks += 1
+                            job.save(update_fields=['processed_tracks', 'successful_tracks', 'failed_tracks', 'error_message', 'updated_at'])
+                            break
 
                 elif job.target_platform == ImportJob.PLATFORM_SPOTIFY:
                     if matched.get('uri'):
@@ -146,13 +179,21 @@ def run_playlist_import(self, job_id: int):
                                     job.successful_tracks += 1
                             except Exception as e:
                                 logger.warning("Error al insertar lote en Spotify playlist: %s", e)
+                                is_quota = is_quota_or_rate_limit_error(e)
+                                err_msg = "Límite de peticiones de Spotify alcanzado (HTTP 429)" if is_quota else str(e)
                                 for pending in pending_spotify_items:
                                     pending.status = ImportJobItem.STATUS_FAILED
-                                    pending.error_message = str(e)
-                                    pending.save(update_fields=['status', 'error_message'])
+                                    pending.error_message = err_msg
+                                    pending.is_quota_error = is_quota
+                                    pending.save(update_fields=['status', 'error_message', 'is_quota_error'])
                                     job.failed_tracks += 1
-                            spotify_uri_batch = []
-                            pending_spotify_items = []
+                                spotify_uri_batch = []
+                                pending_spotify_items = []
+                                if is_quota:
+                                    job.error_message = "Límite de peticiones de Spotify alcanzado (HTTP 429). Se detuvo la transferencia."
+                                    job.processed_tracks += 1
+                                    job.save(update_fields=['processed_tracks', 'successful_tracks', 'failed_tracks', 'error_message', 'updated_at'])
+                                    break
             else:
                 ImportJobItem.objects.create(
                     job=job,
@@ -182,11 +223,16 @@ def run_playlist_import(self, job_id: int):
                     job.successful_tracks += 1
             except Exception as e:
                 logger.warning("Error al insertar lote final en Spotify playlist: %s", e)
+                is_quota = is_quota_or_rate_limit_error(e)
+                err_msg = "Límite de peticiones de Spotify alcanzado (HTTP 429)" if is_quota else str(e)
                 for pending in pending_spotify_items:
                     pending.status = ImportJobItem.STATUS_FAILED
-                    pending.error_message = str(e)
-                    pending.save(update_fields=['status', 'error_message'])
+                    pending.error_message = err_msg
+                    pending.is_quota_error = is_quota
+                    pending.save(update_fields=['status', 'error_message', 'is_quota_error'])
                     job.failed_tracks += 1
+                if is_quota:
+                    job.error_message = "Límite de peticiones de Spotify alcanzado (HTTP 429). Se detuvo la transferencia."
 
         # 4. Estado final
         if job.successful_tracks == job.total_tracks and job.total_tracks > 0:
