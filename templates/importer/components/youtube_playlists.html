@@ -66,7 +66,7 @@
                             Ver temas
                         </button>
 
-                        <button data-playlist-id="{{ pl.id }}" data-playlist-name="{{ pl.name }}" data-source="youtube" data-target="spotify" class="px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-500 text-white font-medium text-xs transition flex items-center gap-1 shadow-sm shadow-red-950">
+                        <button hx-get="{% url 'importer:preview_match' source_platform='youtube' playlist_id=pl.id %}?name={{ pl.name|urlencode }}" hx-target="#modal-container" title="Transferir hacia Spotify" class="px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-500 text-white font-medium text-xs transition flex items-center gap-1 shadow-sm shadow-red-950">
                             <span>➔ Spotify</span>
                         </button>
                     </div>
