@@ -1327,6 +1327,38 @@ class ImportViewsTests(TestCase):
         self.assertEqual(ImportJob.objects.filter(user=self.user, source_playlist_id='sp_dup_1').count(), 1)
         self.assertEqual(mock_delay.call_count, 1)
 
+    @patch('apps.importer.views.run_playlist_import.delay')
+    def test_start_import_lock_prevents_race_when_held_by_another_request(self, mock_delay):
+        # Same closing of the TOCTOU gap as resume_import_view, verified
+        # the same way: pre-acquire the exact lock key the view would try
+        # to take -- simulating a genuinely concurrent request rather than
+        # a sequential double-submit -- and confirm this request backs off
+        # with a clear message instead of racing past the check-then-create
+        # window and enqueueing a second Celery task for the same transfer.
+        self.client.login(username="view_user", password="password123")
+        token = PlatformToken.objects.create(user=self.user, platform=PlatformToken.PLATFORM_YOUTUBE)
+        token.set_access_token("valid_token")
+        token.save()
+
+        lock_key = f"start_import_lock:{self.user.id}:spotify:sp_race_1:youtube"
+        cache.set(lock_key, "1", timeout=10)
+        try:
+            url = reverse('importer:start_import')
+            response = self.client.post(url, {
+                'source_platform': 'spotify',
+                'source_playlist_id': 'sp_race_1',
+                'source_playlist_name': 'Race List',
+                'dest_mode': 'new',
+                'new_playlist_name': 'Race List (YT)',
+            })
+
+            self.assertEqual(response.status_code, 200)
+            mock_delay.assert_not_called()
+            self.assertEqual(ImportJob.objects.filter(user=self.user, source_playlist_id='sp_race_1').count(), 0)
+            self.assertContains(response, "Intenta de nuevo en un momento")
+        finally:
+            cache.delete(lock_key)
+
     def test_import_progress_view_cross_user_forbidden(self):
         attacker = User.objects.create_user(username="attacker", password="password123")
         self.client.login(username="attacker", password="password123")

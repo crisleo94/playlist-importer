@@ -1,4 +1,5 @@
 import logging
+from contextlib import contextmanager
 from django.contrib.auth.decorators import login_required
 from django.core.cache import cache
 from django.shortcuts import get_object_or_404, render
@@ -37,6 +38,37 @@ def _suggest_matching_playlist_id(source_name: str, target_playlists: list[dict]
         if (playlist.get('name') or '').strip().lower() == normalized_source:
             return playlist.get('id', '')
     return ''
+
+
+@contextmanager
+def _import_job_lock(lock_key: str, timeout: int = 10):
+    """Lock atómico (cache.add solo tiene éxito si la clave no existe
+    todavía) para cerrar la ventana entre "chequear si ya hay un job activo
+    para esta transferencia" y "crear uno nuevo": sin esto, dos requests
+    realmente concurrentes podrían pasar el chequeo antes de que cualquiera
+    de las dos cree su ImportJob, encolando dos tareas Celery duplicadas
+    para lo mismo. Da `True` si esta llamada tomó el lock, `False` si otra
+    request ya lo tiene -- en ese caso el lock no se borra, porque no es
+    nuestro para borrar."""
+    acquired = cache.add(lock_key, "1", timeout=timeout)
+    try:
+        yield acquired
+    finally:
+        if acquired:
+            cache.delete(lock_key)
+
+
+def _find_active_job(user, source_platform, source_playlist_id, target_platform, target_playlist_id=None):
+    filters = dict(
+        user=user,
+        source_platform=source_platform,
+        source_playlist_id=source_playlist_id,
+        target_platform=target_platform,
+        status__in=[ImportJob.STATUS_PENDING, ImportJob.STATUS_PROCESSING],
+    )
+    if target_playlist_id is not None:
+        filters['target_playlist_id'] = target_playlist_id
+    return ImportJob.objects.filter(**filters).first()
 
 
 @login_required
@@ -358,38 +390,46 @@ def start_import_view(request):
             'error_message': f"Debes conectar tu cuenta de {target_name} antes de iniciar la importación.",
         })
 
-    # Prevención de doble-submit o jobs concurrentes duplicados para la misma lista
-    existing_job = ImportJob.objects.filter(
-        user=request.user,
-        source_platform=source_platform,
-        source_playlist_id=source_playlist_id,
-        target_platform=target_platform,
-        status__in=[ImportJob.STATUS_PENDING, ImportJob.STATUS_PROCESSING]
-    ).first()
-    if existing_job:
+    # Lock atómico: ver _import_job_lock. Cierra la ventana entre "chequear
+    # si ya hay un job activo para esta lista" y "crear uno nuevo" para que
+    # dos requests concurrentes no encolen dos tareas Celery duplicadas.
+    lock_key = f"start_import_lock:{request.user.id}:{source_platform}:{source_playlist_id}:{target_platform}"
+    with _import_job_lock(lock_key) as acquired:
+        if not acquired:
+            existing_job = _find_active_job(request.user, source_platform, source_playlist_id, target_platform)
+            if existing_job:
+                return render(request, 'importer/components/import_progress.html', {
+                    'job': existing_job,
+                })
+            return render(request, 'importer/components/import_progress.html', {
+                'error_message': 'Ya se está iniciando una importación para esta playlist. Intenta de nuevo en un momento.',
+            })
+
+        existing_job = _find_active_job(request.user, source_platform, source_playlist_id, target_platform)
+        if existing_job:
+            return render(request, 'importer/components/import_progress.html', {
+                'job': existing_job,
+            })
+
+        job = ImportJob.objects.create(
+            user=request.user,
+            source_platform=source_platform,
+            target_platform=target_platform,
+            source_playlist_id=source_playlist_id,
+            source_playlist_name=source_playlist_name,
+            destination_mode=dest_mode,
+            target_playlist_id=selected_playlist_id if dest_mode == ImportJob.DEST_MODE_EXISTING else '',
+            target_playlist_name=new_playlist_name if dest_mode == ImportJob.DEST_MODE_NEW else '',
+            status=ImportJob.STATUS_PENDING,
+        )
+
+        task = run_playlist_import.delay(job.id)
+        job.celery_task_id = task.id or ''
+        job.save(update_fields=['celery_task_id'])
+
         return render(request, 'importer/components/import_progress.html', {
-            'job': existing_job,
+            'job': job,
         })
-
-    job = ImportJob.objects.create(
-        user=request.user,
-        source_platform=source_platform,
-        target_platform=target_platform,
-        source_playlist_id=source_playlist_id,
-        source_playlist_name=source_playlist_name,
-        destination_mode=dest_mode,
-        target_playlist_id=selected_playlist_id if dest_mode == ImportJob.DEST_MODE_EXISTING else '',
-        target_playlist_name=new_playlist_name if dest_mode == ImportJob.DEST_MODE_NEW else '',
-        status=ImportJob.STATUS_PENDING,
-    )
-
-    task = run_playlist_import.delay(job.id)
-    job.celery_task_id = task.id or ''
-    job.save(update_fields=['celery_task_id'])
-
-    return render(request, 'importer/components/import_progress.html', {
-        'job': job,
-    })
 
 
 @login_required
@@ -403,17 +443,6 @@ def import_progress_view(request, job_id):
         'job': job,
         'unmatched_items': unmatched_items,
     })
-
-
-def _find_active_job_for_destination(user, source_platform, source_playlist_id, target_platform, target_playlist_id):
-    return ImportJob.objects.filter(
-        user=user,
-        source_platform=source_platform,
-        source_playlist_id=source_playlist_id,
-        target_platform=target_platform,
-        target_playlist_id=target_playlist_id,
-        status__in=[ImportJob.STATUS_PENDING, ImportJob.STATUS_PROCESSING]
-    ).first()
 
 
 @login_required
@@ -432,28 +461,22 @@ def resume_import_view(request, job_id):
             'error_message': 'No se puede continuar: esta importación no llegó a registrar una playlist de destino.',
         })
 
-    # Lock atómico (cache.add solo tiene éxito si la clave no existe
-    # todavía) para cerrar la ventana entre "chequear si ya hay un job
-    # activo hacia este destino" y "crear uno nuevo": sin esto, dos
-    # requests realmente concurrentes podrían pasar el chequeo antes de
-    # que cualquiera de las dos cree su ImportJob, encolando dos tareas
-    # Celery para la misma transferencia.
     lock_key = (
         f"resume_import_lock:{request.user.id}:{original_job.source_platform}:"
         f"{original_job.source_playlist_id}:{original_job.target_platform}:"
         f"{original_job.target_playlist_id}"
     )
-    if not cache.add(lock_key, "1", timeout=10):
-        existing_job = _find_active_job_for_destination(
-            request.user, original_job.source_platform, original_job.source_playlist_id,
-            original_job.target_platform, original_job.target_playlist_id,
-        )
-        return render(request, 'importer/components/import_progress.html', {
-            'job': existing_job or original_job,
-        })
+    with _import_job_lock(lock_key) as acquired:
+        if not acquired:
+            existing_job = _find_active_job(
+                request.user, original_job.source_platform, original_job.source_playlist_id,
+                original_job.target_platform, original_job.target_playlist_id,
+            )
+            return render(request, 'importer/components/import_progress.html', {
+                'job': existing_job or original_job,
+            })
 
-    try:
-        existing_job = _find_active_job_for_destination(
+        existing_job = _find_active_job(
             request.user, original_job.source_platform, original_job.source_playlist_id,
             original_job.target_platform, original_job.target_playlist_id,
         )
@@ -482,5 +505,3 @@ def resume_import_view(request, job_id):
         return render(request, 'importer/components/import_progress.html', {
             'job': resume_job,
         })
-    finally:
-        cache.delete(lock_key)
