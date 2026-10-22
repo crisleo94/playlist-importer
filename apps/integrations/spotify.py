@@ -69,3 +69,89 @@ def get_spotify_client(user) -> spotipy.Spotify:
         access_token = platform_token.get_access_token()
 
     return spotipy.Spotify(auth=access_token)
+
+
+def get_user_spotify_playlists(user, search_query: str = '', max_playlists: int = 250) -> list[dict]:
+    sp = get_spotify_client(user)
+    playlists = []
+    offset = 0
+    batch_limit = 50
+
+    while len(playlists) < max_playlists:
+        results = sp.current_user_playlists(limit=batch_limit, offset=offset)
+        items = results.get('items', [])
+        if not items:
+            break
+
+        for item in items:
+            if not item:
+                continue
+            name = item.get('name') or 'Sin título'
+            if search_query and search_query.lower() not in name.lower():
+                continue
+
+            images = item.get('images') or []
+            image_url = images[0].get('url') if images else None
+
+            owner = item.get('owner', {}).get('display_name') or 'Spotify'
+            tracks_total = item.get('tracks', {}).get('total', 0)
+
+            playlists.append({
+                'id': item.get('id'),
+                'name': name,
+                'description': item.get('description') or '',
+                'total_tracks': tracks_total,
+                'image_url': image_url,
+                'owner_name': owner,
+                'external_url': item.get('external_urls', {}).get('spotify', ''),
+            })
+
+            if len(playlists) >= max_playlists:
+                break
+
+        if not results.get('next') or len(items) < batch_limit:
+            break
+        offset += len(items)
+
+    return playlists
+
+
+def get_spotify_playlist_tracks(user, playlist_id: str, limit: int = 100) -> list[dict]:
+    sp = get_spotify_client(user)
+    tracks = []
+    offset = 0
+
+    while len(tracks) < limit:
+        batch_limit = min(100, limit - len(tracks))
+        results = sp.playlist_items(playlist_id, limit=batch_limit, offset=offset)
+        items = results.get('items', [])
+        if not items:
+            break
+
+        for entry in items:
+            track = entry.get('track')
+            if not track or track.get('is_local'):
+                continue
+
+            artists = [a.get('name') for a in track.get('artists', []) if a.get('name')]
+            album = track.get('album', {})
+            album_images = album.get('images', [])
+
+            tracks.append({
+                'id': track.get('id'),
+                'title': track.get('name'),
+                'artist': ', '.join(artists) if artists else 'Artista desconocido',
+                'album': album.get('name', ''),
+                'duration_ms': track.get('duration_ms', 0),
+                'isrc': track.get('external_ids', {}).get('isrc', ''),
+                'image_url': album_images[0].get('url') if album_images else None,
+            })
+
+            if len(tracks) >= limit:
+                break
+
+        if not results.get('next') or len(items) < batch_limit:
+            break
+        offset += len(items)
+
+    return tracks

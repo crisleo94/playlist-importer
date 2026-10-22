@@ -1,19 +1,23 @@
 {% extends "base.html" %}
 
-{% block title %}Dashboard — Playlist Importer{% endblock %}
+{% block title %}Comparativa de Playlists — Playlist Importer{% endblock %}
 
 {% block content %}
 <div class="space-y-6">
-    <!-- Header de Conexiones -->
+    <!-- Header de Conexiones de Cuentas -->
     <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-sm">
-        <h2 class="text-lg font-bold mb-1">Cuentas Vinculadas</h2>
-        <p class="text-xs text-slate-400 mb-6">Conecta ambas plataformas para habilitar la sincronización e importación bidireccional.</p>
+        <div class="flex items-center justify-between mb-4">
+            <div>
+                <h2 class="text-lg font-bold text-slate-100">Cuentas Vinculadas</h2>
+                <p class="text-xs text-slate-400 mt-0.5">Conecta ambas plataformas para habilitar la importación y sincronización de música.</p>
+            </div>
+        </div>
 
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
             <!-- Spotify Card -->
-            <div class="p-5 rounded-xl border {% if spotify_token %}bg-emerald-950/20 border-emerald-800/50{% else %}bg-slate-950/60 border-slate-800{% endif %} flex items-center justify-between">
-                <div class="flex items-center gap-4">
-                    <div class="w-12 h-12 rounded-xl bg-[#1DB954]/20 border border-[#1DB954]/40 flex items-center justify-center text-2xl text-[#1DB954]">
+            <div class="p-4 rounded-xl border {% if spotify_token %}bg-emerald-950/20 border-emerald-800/40{% else %}bg-slate-950/60 border-slate-800{% endif %} flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 rounded-lg bg-[#1DB954]/20 border border-[#1DB954]/40 flex items-center justify-center text-xl text-[#1DB954]">
                         🟢
                     </div>
                     <div>
@@ -29,7 +33,7 @@
                             {% if spotify_token %}
                                 Usuario: <span class="text-slate-200 font-medium">{{ spotify_token.platform_username|default:"Conectado" }}</span>
                             {% else %}
-                                Requiere autorización de lectura y escritura
+                                Autorización requerida
                             {% endif %}
                         </p>
                     </div>
@@ -39,12 +43,12 @@
                     {% if spotify_token %}
                         <form method="post" action="{% url 'integrations:spotify_disconnect' %}">
                             {% csrf_token %}
-                            <button type="submit" class="text-xs bg-rose-950/50 hover:bg-rose-900/60 text-rose-300 border border-rose-800/60 px-3.5 py-2 rounded-lg transition font-medium">
+                            <button type="submit" class="text-xs bg-rose-950/50 hover:bg-rose-900/60 text-rose-300 border border-rose-800/60 px-3 py-1.5 rounded-lg transition font-medium">
                                 Desconectar
                             </button>
                         </form>
                     {% else %}
-                        <a href="{% url 'integrations:spotify_connect' %}" class="inline-flex items-center gap-1.5 text-xs bg-[#1DB954] hover:bg-[#1aa34a] text-black font-bold px-4 py-2 rounded-lg transition shadow-md shadow-[#1DB954]/10">
+                        <a href="{% url 'integrations:spotify_connect' %}" class="inline-flex items-center gap-1.5 text-xs bg-[#1DB954] hover:bg-[#1aa34a] text-black font-bold px-3.5 py-2 rounded-lg transition shadow-md shadow-[#1DB954]/10">
                             Conectar Spotify
                         </a>
                     {% endif %}
@@ -52,9 +56,9 @@
             </div>
 
             <!-- YouTube Music Card -->
-            <div class="p-5 rounded-xl border {% if youtube_token %}bg-rose-950/20 border-rose-800/50{% else %}bg-slate-950/60 border-slate-800{% endif %} flex items-center justify-between">
-                <div class="flex items-center gap-4">
-                    <div class="w-12 h-12 rounded-xl bg-red-600/20 border border-red-600/40 flex items-center justify-center text-2xl text-red-500">
+            <div class="p-4 rounded-xl border {% if youtube_token %}bg-rose-950/20 border-rose-800/40{% else %}bg-slate-950/60 border-slate-800{% endif %} flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 rounded-lg bg-red-600/20 border border-red-600/40 flex items-center justify-center text-xl text-red-500">
                         🔴
                     </div>
                     <div>
@@ -70,7 +74,7 @@
                             {% if youtube_token %}
                                 Canal: <span class="text-slate-200 font-medium">{{ youtube_token.platform_username|default:"Conectado" }}</span>
                             {% else %}
-                                Requiere autorización de YouTube Data API v3
+                                Autorización requerida
                             {% endif %}
                         </p>
                     </div>
@@ -80,12 +84,12 @@
                     {% if youtube_token %}
                         <form method="post" action="{% url 'integrations:youtube_disconnect' %}">
                             {% csrf_token %}
-                            <button type="submit" class="text-xs bg-rose-950/50 hover:bg-rose-900/60 text-rose-300 border border-rose-800/60 px-3.5 py-2 rounded-lg transition font-medium">
+                            <button type="submit" class="text-xs bg-rose-950/50 hover:bg-rose-900/60 text-rose-300 border border-rose-800/60 px-3 py-1.5 rounded-lg transition font-medium">
                                 Desconectar
                             </button>
                         </form>
                     {% else %}
-                        <a href="{% url 'integrations:youtube_connect' %}" class="inline-flex items-center gap-1.5 text-xs bg-red-600 hover:bg-red-500 text-white font-bold px-4 py-2 rounded-lg transition shadow-md shadow-red-600/20">
+                        <a href="{% url 'integrations:youtube_connect' %}" class="inline-flex items-center gap-1.5 text-xs bg-red-600 hover:bg-red-500 text-white font-bold px-3.5 py-2 rounded-lg transition shadow-md shadow-red-600/20">
                             Conectar YouTube
                         </a>
                     {% endif %}
@@ -94,41 +98,102 @@
         </div>
     </div>
 
-    <!-- Comparativa Placeholder (se expandirá en TASK-003) -->
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 min-h-[300px] flex flex-col justify-between">
-            <div>
-                <div class="flex items-center justify-between pb-4 border-b border-slate-800 mb-4">
-                    <h3 class="font-bold flex items-center gap-2 text-sm text-emerald-400">
-                        <span>🟢</span> Playlists de Spotify
-                    </h3>
+    <!-- Comparativa de 2 Columnas -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+        <!-- Columna Izquierda: Spotify -->
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-sm space-y-4">
+            <div class="flex items-center justify-between pb-3 border-b border-slate-800">
+                <div class="flex items-center gap-2">
+                    <span class="w-3 h-3 rounded-full bg-[#1DB954]"></span>
+                    <h3 class="font-bold text-sm text-slate-100">Playlists de Spotify</h3>
                 </div>
-                <div class="text-center py-12 text-slate-500 text-xs">
-                    {% if spotify_token %}
-                        Cargando playlists en la siguiente fase (TASK-003)...
-                    {% else %}
-                        Conecta tu cuenta de Spotify para ver tus playlists aquí.
-                    {% endif %}
+
+                <!-- Indicador de carga HTMX -->
+                <div id="spotify-spinner" class="htmx-indicator flex items-center gap-1.5 text-xs text-emerald-400">
+                    <svg class="animate-spin h-3.5 w-3.5" viewBox="0 0 24 24" fill="none">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+                    </svg>
+                    <span>Cargando...</span>
+                </div>
+            </div>
+
+            <!-- Buscador en vivo -->
+            {% if spotify_token %}
+                <div class="relative">
+                    <input type="text"
+                           name="q"
+                           placeholder="Buscar playlist de Spotify..."
+                           hx-get="{% url 'importer:spotify_playlists' %}"
+                           hx-trigger="keyup changed delay:300ms, search"
+                           hx-target="#spotify-playlists-container"
+                           hx-indicator="#spotify-spinner"
+                           class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500">
+                </div>
+            {% endif %}
+
+            <!-- Contenedor cargado vía HTMX -->
+            <div id="spotify-playlists-container"
+                 hx-get="{% url 'importer:spotify_playlists' %}"
+                 hx-trigger="load"
+                 hx-indicator="#spotify-spinner">
+                <!-- Skeleton loader -->
+                <div class="space-y-3 py-2 animate-pulse">
+                    <div class="h-16 bg-slate-950/60 rounded-xl border border-slate-800/60"></div>
+                    <div class="h-16 bg-slate-950/60 rounded-xl border border-slate-800/60"></div>
+                    <div class="h-16 bg-slate-950/60 rounded-xl border border-slate-800/60"></div>
                 </div>
             </div>
         </div>
 
-        <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 min-h-[300px] flex flex-col justify-between">
-            <div>
-                <div class="flex items-center justify-between pb-4 border-b border-slate-800 mb-4">
-                    <h3 class="font-bold flex items-center gap-2 text-sm text-red-400">
-                        <span>🔴</span> Playlists de YouTube Music
-                    </h3>
+        <!-- Columna Derecha: YouTube Music -->
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-sm space-y-4">
+            <div class="flex items-center justify-between pb-3 border-b border-slate-800">
+                <div class="flex items-center gap-2">
+                    <span class="w-3 h-3 rounded-full bg-red-600"></span>
+                    <h3 class="font-bold text-sm text-slate-100">Playlists de YouTube Music</h3>
                 </div>
-                <div class="text-center py-12 text-slate-500 text-xs">
-                    {% if youtube_token %}
-                        Cargando playlists en la siguiente fase (TASK-003)...
-                    {% else %}
-                        Conecta tu cuenta de YouTube para ver tus playlists aquí.
-                    {% endif %}
+
+                <!-- Indicador de carga HTMX -->
+                <div id="youtube-spinner" class="htmx-indicator flex items-center gap-1.5 text-xs text-red-400">
+                    <svg class="animate-spin h-3.5 w-3.5" viewBox="0 0 24 24" fill="none">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+                    </svg>
+                    <span>Cargando...</span>
+                </div>
+            </div>
+
+            <!-- Buscador en vivo -->
+            {% if youtube_token %}
+                <div class="relative">
+                    <input type="text"
+                           name="q"
+                           placeholder="Buscar playlist de YouTube Music..."
+                           hx-get="{% url 'importer:youtube_playlists' %}"
+                           hx-trigger="keyup changed delay:300ms, search"
+                           hx-target="#youtube-playlists-container"
+                           hx-indicator="#youtube-spinner"
+                           class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500">
+                </div>
+            {% endif %}
+
+            <!-- Contenedor cargado vía HTMX -->
+            <div id="youtube-playlists-container"
+                 hx-get="{% url 'importer:youtube_playlists' %}"
+                 hx-trigger="load"
+                 hx-indicator="#youtube-spinner">
+                <!-- Skeleton loader -->
+                <div class="space-y-3 py-2 animate-pulse">
+                    <div class="h-16 bg-slate-950/60 rounded-xl border border-slate-800/60"></div>
+                    <div class="h-16 bg-slate-950/60 rounded-xl border border-slate-800/60"></div>
+                    <div class="h-16 bg-slate-950/60 rounded-xl border border-slate-800/60"></div>
                 </div>
             </div>
         </div>
     </div>
 </div>
+
+<!-- Modal Container para previsualización de canciones -->
+<div id="modal-container"></div>
 {% endblock %}
