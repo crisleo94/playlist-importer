@@ -969,6 +969,79 @@ class CeleryImportTaskTests(TestCase):
         self.assertEqual(skipped_items.count(), 2)
         self.assertTrue(all(item.status == ImportJobItem.STATUS_ADDED for item in skipped_items))
 
+    @patch('apps.importer.tasks.add_video_to_youtube_playlist')
+    @patch('apps.importer.tasks.create_youtube_playlist')
+    @patch('apps.importer.tasks.get_youtube_client')
+    @patch('apps.importer.tasks.get_spotify_playlist_tracks')
+    def test_matcher_cache_survives_across_separate_job_runs_on_resume(
+        self, mock_get_tracks, mock_yt_client, mock_create_yt, mock_add_video
+    ):
+        # TASK-010 AC-4: a track whose search already got resolved and cached
+        # in a previous job run must not search again in a later job against
+        # the same destination -- even when it wasn't skipped by the AC-1
+        # already-added check, because its insert failed the first time
+        # (so its status isn't ADDED, and AC-1 alone wouldn't save the call).
+        mock_get_tracks.return_value = [
+            {'id': 'trk_1', 'title': 'Song One', 'artist': 'Artist', 'isrc': 'ISRC001'},
+        ]
+        mock_create_yt.return_value = {'id': 'yt_dest', 'name': 'Dest'}
+
+        search_execute = MagicMock(return_value={
+            'items': [{
+                'id': {'videoId': 'vid_1'},
+                'snippet': {'title': 'Artist - Song One', 'channelTitle': 'Artist', 'description': ''},
+            }]
+        })
+        mock_yt = MagicMock()
+        mock_yt.search.return_value.list.return_value.execute = search_execute
+        mock_yt_client.return_value = mock_yt
+
+        # Job 1: the track matches fine, but the insert fails with a quota
+        # error -- so the item never reaches status=ADDED.
+        mock_add_video.side_effect = Exception('quotaExceeded: Daily limit exceeded')
+
+        job1 = ImportJob.objects.create(
+            user=self.user,
+            source_platform='spotify',
+            target_platform='youtube',
+            source_playlist_id='sp_src',
+            source_playlist_name='List',
+            destination_mode='new',
+            status=ImportJob.STATUS_PENDING,
+        )
+        run_playlist_import(job1.id)
+        job1.refresh_from_db()
+
+        self.assertEqual(job1.items.first().status, ImportJobItem.STATUS_FAILED)
+        self.assertEqual(search_execute.call_count, 1)
+
+        # Job 2 ("resume"): same destination, same track, insert succeeds
+        # this time. AC-1 does NOT skip this track (it was never ADDED),
+        # so match_spotify_track_to_youtube runs again for real -- the only
+        # thing that can save the API call here is matcher.py's own cache.
+        mock_add_video.side_effect = None
+        mock_add_video.return_value = {'id': 'item_created'}
+
+        job2 = ImportJob.objects.create(
+            user=self.user,
+            source_platform='spotify',
+            target_platform='youtube',
+            source_playlist_id='sp_src',
+            source_playlist_name='List',
+            destination_mode='existing',
+            target_playlist_id=job1.target_playlist_id,
+            resumed_from=job1,
+            status=ImportJob.STATUS_PENDING,
+        )
+        run_playlist_import(job2.id)
+        job2.refresh_from_db()
+
+        self.assertEqual(job2.successful_tracks, 1)
+        self.assertEqual(job2.items.first().status, ImportJobItem.STATUS_ADDED)
+        # The search was never repeated: the cached result from job1 served
+        # job2 without a second call to the YouTube search API.
+        self.assertEqual(search_execute.call_count, 1)
+
     @patch('apps.importer.tasks.get_spotify_playlist_tracks')
     def test_run_playlist_import_soft_time_limit_exceeded(self, mock_get_tracks):
         from celery.exceptions import SoftTimeLimitExceeded
