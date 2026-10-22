@@ -1,5 +1,6 @@
+import logging
 import secrets
-from datetime import timedelta
+from datetime import timedelta, timezone as dt_timezone
 from django.contrib.auth.decorators import login_required
 from django.contrib import messages
 from django.http import JsonResponse, HttpResponseBadRequest
@@ -8,6 +9,8 @@ from django.utils import timezone
 from .models import PlatformToken
 from .spotify import get_spotify_auth_url, exchange_spotify_code, get_spotify_client
 from .youtube import get_youtube_auth_url, exchange_youtube_code, get_youtube_client
+
+logger = logging.getLogger(__name__)
 
 
 @login_required
@@ -54,8 +57,8 @@ def spotify_callback(request):
             profile = sp.current_user()
             platform_token.platform_username = profile.get('display_name') or profile.get('id', '')
             platform_token.platform_user_id = profile.get('id', '')
-        except Exception:
-            pass
+        except Exception as profile_err:
+            logger.warning("No se pudo obtener el perfil de Spotify para el usuario %s: %s", request.user.username, profile_err)
 
         platform_token.save()
         messages.success(request, f'Spotify connected successfully as {platform_token.platform_username or "user"}.')
@@ -115,6 +118,8 @@ def youtube_callback(request):
             platform_token.set_refresh_token(refresh_token)
 
         if expiry:
+            if timezone.is_naive(expiry):
+                expiry = expiry.replace(tzinfo=dt_timezone.utc)
             platform_token.expires_at = expiry
         else:
             platform_token.expires_at = timezone.now() + timedelta(seconds=3600)
@@ -127,8 +132,8 @@ def youtube_callback(request):
                 snippet = items[0].get('snippet', {})
                 platform_token.platform_username = snippet.get('title', '')
                 platform_token.platform_user_id = items[0].get('id', '')
-        except Exception:
-            pass
+        except Exception as profile_err:
+            logger.warning("No se pudo obtener el canal de YouTube para el usuario %s: %s", request.user.username, profile_err)
 
         platform_token.save()
         messages.success(request, f'YouTube connected successfully as {platform_token.platform_username or "user"}.')

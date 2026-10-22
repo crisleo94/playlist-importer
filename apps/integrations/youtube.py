@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import timedelta, timezone as dt_timezone
 import google.oauth2.credentials
 from google_auth_oauthlib.flow import Flow
 from google.auth.transport.requests import Request
@@ -12,6 +12,12 @@ YOUTUBE_SCOPES = [
     'https://www.googleapis.com/auth/youtube.force-ssl',
     'https://www.googleapis.com/auth/userinfo.profile',
 ]
+
+
+def _to_aware_utc(dt):
+    if dt and timezone.is_naive(dt):
+        return dt.replace(tzinfo=dt_timezone.utc)
+    return dt
 
 
 def _get_client_config() -> dict:
@@ -58,7 +64,7 @@ def exchange_youtube_code(code: str) -> dict:
         'client_id': credentials.client_id,
         'client_secret': credentials.client_secret,
         'scopes': credentials.scopes,
-        'expiry': credentials.expiry,
+        'expiry': _to_aware_utc(credentials.expiry),
     }
 
 
@@ -81,7 +87,7 @@ def refresh_youtube_token(platform_token: PlatformToken) -> str:
 
     platform_token.set_access_token(credentials.token)
     if credentials.expiry:
-        platform_token.expires_at = credentials.expiry
+        platform_token.expires_at = _to_aware_utc(credentials.expiry)
     else:
         platform_token.expires_at = timezone.now() + timedelta(seconds=3600)
     platform_token.save()

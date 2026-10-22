@@ -42,9 +42,12 @@
             <div class="flex items-center gap-4">
                 {% if user.is_authenticated %}
                     <span class="text-sm text-slate-400">Hola, <strong class="text-slate-200">{{ user.username }}</strong></span>
-                    <a href="{% url 'accounts:logout' %}" class="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-lg border border-slate-700 transition">
-                        Cerrar sesión
-                    </a>
+                    <form method="post" action="{% url 'accounts:logout' %}" class="inline">
+                        {% csrf_token %}
+                        <button type="submit" class="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-lg border border-slate-700 transition font-medium">
+                            Cerrar sesión
+                        </button>
+                    </form>
                 {% else %}
                     <a href="{% url 'accounts:login' %}" class="text-sm text-slate-300 hover:text-white px-3 py-1.5 transition">Iniciar sesión</a>
                     <a href="{% url 'accounts:register' %}" class="text-sm bg-emerald-600 hover:bg-emerald-500 text-white font-medium px-3.5 py-1.5 rounded-lg transition">Registrarse</a>
