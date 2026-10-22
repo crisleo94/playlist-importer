@@ -1,6 +1,7 @@
 import logging
 import time
 from celery import shared_task
+from celery.exceptions import SoftTimeLimitExceeded
 from apps.importer.matcher import (
     match_spotify_track_to_youtube,
     match_youtube_track_to_spotify,
@@ -22,7 +23,7 @@ from apps.integrations.youtube import (
 logger = logging.getLogger(__name__)
 
 
-@shared_task(bind=True)
+@shared_task(bind=True, time_limit=900, soft_time_limit=840)
 def run_playlist_import(self, job_id: int):
     try:
         job = ImportJob.objects.select_related('user').get(id=job_id)
@@ -198,6 +199,12 @@ def run_playlist_import(self, job_id: int):
         job.current_track_name = ''
         job.save(update_fields=['status', 'successful_tracks', 'failed_tracks', 'current_track_name', 'updated_at'])
 
+    except SoftTimeLimitExceeded:
+        logger.error("Tiempo límite excedido en Celery task de importación job_id=%s", job_id)
+        job.status = ImportJob.STATUS_FAILED
+        job.error_message = "El tiempo de importación ha excedido el límite permitido (timeout de ejecución)."
+        job.current_track_name = ''
+        job.save(update_fields=['status', 'error_message', 'current_track_name', 'updated_at'])
     except Exception as e:
         logger.exception("Fallo crítico en tarea Celery de importación job_id=%s: %s", job_id, e)
         job.status = ImportJob.STATUS_FAILED

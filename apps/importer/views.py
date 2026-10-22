@@ -233,6 +233,19 @@ def start_import_view(request):
             'error_message': f"Debes conectar tu cuenta de {target_name} antes de iniciar la importación.",
         })
 
+    # Prevención de doble-submit o jobs concurrentes duplicados para la misma lista
+    existing_job = ImportJob.objects.filter(
+        user=request.user,
+        source_platform=source_platform,
+        source_playlist_id=source_playlist_id,
+        target_platform=target_platform,
+        status__in=[ImportJob.STATUS_PENDING, ImportJob.STATUS_PROCESSING]
+    ).first()
+    if existing_job:
+        return render(request, 'importer/components/import_progress.html', {
+            'job': existing_job,
+        })
+
     job = ImportJob.objects.create(
         user=request.user,
         source_platform=source_platform,
@@ -259,7 +272,7 @@ def import_progress_view(request, job_id):
     job = get_object_or_404(ImportJob, id=job_id, user=request.user)
     unmatched_items = []
     if job.is_finished:
-        unmatched_items = list(job.items.filter(status=ImportJobItem.STATUS_NOT_FOUND)[:50])
+        unmatched_items = list(job.items.filter(status__in=[ImportJobItem.STATUS_NOT_FOUND, ImportJobItem.STATUS_FAILED])[:50])
 
     return render(request, 'importer/components/import_progress.html', {
         'job': job,

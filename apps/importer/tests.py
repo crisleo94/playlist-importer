@@ -766,6 +766,26 @@ class CeleryImportTaskTests(TestCase):
         self.assertEqual(job.items.filter(status=ImportJobItem.STATUS_NOT_FOUND).count(), 1)
 
 
+    @patch('apps.importer.tasks.get_spotify_playlist_tracks')
+    def test_run_playlist_import_soft_time_limit_exceeded(self, mock_get_tracks):
+        from celery.exceptions import SoftTimeLimitExceeded
+        mock_get_tracks.side_effect = SoftTimeLimitExceeded()
+
+        job = ImportJob.objects.create(
+            user=self.user,
+            source_platform='spotify',
+            target_platform='youtube',
+            source_playlist_id='sp_timeout',
+            source_playlist_name='Timeout List',
+            status=ImportJob.STATUS_PENDING
+        )
+
+        run_playlist_import(job.id)
+        job.refresh_from_db()
+
+        self.assertEqual(job.status, ImportJob.STATUS_FAILED)
+        self.assertIn("límite permitido", job.error_message)
+
 class ImportViewsTests(TestCase):
     def setUp(self):
         cache.clear()
@@ -914,3 +934,81 @@ class ImportViewsTests(TestCase):
         self.assertContains(response, "Unmatched Rare Demo")
         self.assertContains(response, "Underground Band")
         self.assertContains(response, "Sin coincidencia")
+
+
+    @patch('apps.importer.views.run_playlist_import.delay')
+    def test_start_import_double_submit_prevents_duplicate_job_and_task(self, mock_delay):
+        self.client.login(username="view_user", password="password123")
+        token = PlatformToken.objects.create(
+            user=self.user,
+            platform=PlatformToken.PLATFORM_YOUTUBE
+        )
+        token.set_access_token("valid_token")
+        token.save()
+
+        mock_delay.return_value = MagicMock(id='task_uuid')
+        url = reverse('importer:start_import')
+        payload = {
+            'source_platform': 'spotify',
+            'source_playlist_id': 'sp_dup_1',
+            'source_playlist_name': 'Dup List',
+            'dest_mode': 'new',
+            'new_playlist_name': 'Dup List (YT)',
+        }
+
+        # First submit
+        r1 = self.client.post(url, payload)
+        self.assertEqual(r1.status_code, 200)
+
+        # Immediate double submit (double click / network retry)
+        r2 = self.client.post(url, payload)
+        self.assertEqual(r2.status_code, 200)
+
+        # Only 1 job created and 1 Celery task enqueued
+        self.assertEqual(ImportJob.objects.filter(user=self.user, source_playlist_id='sp_dup_1').count(), 1)
+        self.assertEqual(mock_delay.call_count, 1)
+
+    def test_import_progress_view_cross_user_forbidden(self):
+        attacker = User.objects.create_user(username="attacker", password="password123")
+        self.client.login(username="attacker", password="password123")
+
+        # Job belongs to self.user, not attacker
+        victim_job = ImportJob.objects.create(
+            user=self.user,
+            source_platform='spotify',
+            target_platform='youtube',
+            source_playlist_id='sp_priv',
+            source_playlist_name='Private User List',
+            status=ImportJob.STATUS_PROCESSING
+        )
+
+        url = reverse('importer:import_progress', kwargs={'job_id': victim_job.id})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 404)
+
+    def test_import_progress_view_finished_shows_failed_insertion(self):
+        self.client.login(username="view_user", password="password123")
+        job = ImportJob.objects.create(
+            user=self.user,
+            source_platform='spotify',
+            target_platform='youtube',
+            source_playlist_id='sp_1',
+            source_playlist_name='Job with Insert Failure',
+            total_tracks=1,
+            processed_tracks=1,
+            successful_tracks=0,
+            failed_tracks=1,
+            status=ImportJob.STATUS_FAILED
+        )
+        ImportJobItem.objects.create(
+            job=job,
+            source_title='Song Quota Blocked',
+            source_artist='Artist',
+            status=ImportJobItem.STATUS_FAILED,
+            error_message='YouTube API quota exceeded'
+        )
+
+        url = reverse('importer:import_progress', kwargs={'job_id': job.id})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Fallo de inserción")

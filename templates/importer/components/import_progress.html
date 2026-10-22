@@ -9,7 +9,7 @@
      {% endif %}>
 
     <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-2xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden"
-         @click.away="{% if job and job.is_finished %}open = false; setTimeout(() => document.getElementById('modal-container').innerHTML = '', 200){% endif %}">
+         @click.away="open = false; setTimeout(() => document.getElementById('modal-container').innerHTML = '', 200)">
 
         <!-- Header -->
         <div class="p-5 border-b border-slate-800 flex items-center justify-between bg-slate-900/90">
@@ -27,12 +27,11 @@
                 </h3>
             </div>
 
-            {% if job and job.is_finished %}
-                <button @click="open = false; setTimeout(() => document.getElementById('modal-container').innerHTML = '', 200)"
-                        class="text-slate-400 hover:text-white p-2 rounded-lg hover:bg-slate-800 transition">
-                    ✕
-                </button>
-            {% endif %}
+            <button @click="open = false; setTimeout(() => document.getElementById('modal-container').innerHTML = '', 200)"
+                    class="text-slate-400 hover:text-white p-2 rounded-lg hover:bg-slate-800 transition"
+                    title="Cerrar modal">
+                ✕
+            </button>
         </div>
 
         <!-- Body -->
@@ -77,9 +76,13 @@
                                 <div class="text-sm font-bold text-emerald-400">{{ job.successful_tracks }}</div>
                             </div>
                             <div>
-                                <div class="text-[10px] text-slate-400">Omitidas / No halladas</div>
+                                <div class="text-[10px] text-slate-400">Omitidas / Fallidas</div>
                                 <div class="text-sm font-bold text-amber-400">{{ job.failed_tracks }}</div>
                             </div>
+                        </div>
+
+                        <div class="text-center text-[11px] text-slate-500">
+                            Puedes cerrar este modal en cualquier momento; la sincronización continuará en segundo plano.
                         </div>
                     </div>
                 {% else %}
@@ -98,7 +101,7 @@
                                 <div class="text-2xl">⚠</div>
                                 <div>
                                     <div class="font-bold text-sm text-amber-200">Importación Parcialmente Completada</div>
-                                    <div class="text-[11px] text-amber-400 mt-0.5">Se transfirieron {{ job.successful_tracks }} de {{ job.total_tracks }} canciones. Las pistas no encontradas figuran debajo.</div>
+                                    <div class="text-[11px] text-amber-400 mt-0.5">Se transfirieron {{ job.successful_tracks }} de {{ job.total_tracks }} canciones. Las pistas no encontradas o fallidas figuran debajo.</div>
                                 </div>
                             </div>
                         {% else %}
@@ -122,15 +125,15 @@
                                 <div class="text-sm font-bold text-emerald-400">{{ job.successful_tracks }}</div>
                             </div>
                             <div>
-                                <div class="text-[10px] text-slate-400">No encontradas</div>
+                                <div class="text-[10px] text-slate-400">Omitidas / Fallidas</div>
                                 <div class="text-sm font-bold text-rose-400">{{ job.failed_tracks }}</div>
                             </div>
                         </div>
 
-                        <!-- Lista de no encontradas si las hay -->
+                        <!-- Lista de no encontradas / fallidas si las hay -->
                         {% if unmatched_items %}
                             <div class="space-y-2 pt-2">
-                                <div class="text-xs font-bold text-slate-300">Canciones no encontradas en {{ job.target_platform|title }}:</div>
+                                <div class="text-xs font-bold text-slate-300">Pistas omitidas o fallidas:</div>
                                 <div class="border border-slate-800/80 rounded-xl divide-y divide-slate-800/60 overflow-hidden bg-slate-950/40 max-h-48 overflow-y-auto">
                                     {% for item in unmatched_items %}
                                         <div class="p-2.5 text-xs flex items-center justify-between gap-2">
@@ -138,9 +141,15 @@
                                                 <div class="font-medium text-slate-200 truncate">{{ item.source_title }}</div>
                                                 <div class="text-[10px] text-slate-400 truncate">{{ item.source_artist }}</div>
                                             </div>
-                                            <span class="text-[10px] text-amber-400 bg-amber-950/40 px-2 py-0.5 rounded border border-amber-900/50">
-                                                Sin coincidencia
-                                            </span>
+                                            {% if item.status == 'failed' %}
+                                                <span class="text-[10px] text-rose-400 bg-rose-950/40 px-2 py-0.5 rounded border border-rose-900/50" title="{{ item.error_message }}">
+                                                    Fallo de inserción
+                                                </span>
+                                            {% else %}
+                                                <span class="text-[10px] text-amber-400 bg-amber-950/40 px-2 py-0.5 rounded border border-amber-900/50">
+                                                    Sin coincidencia
+                                                </span>
+                                            {% endif %}
                                         </div>
                                     {% endfor %}
                                 </div>
@@ -152,21 +161,27 @@
         </div>
 
         <!-- Footer -->
-        <div class="p-4 border-t border-slate-800 bg-slate-950/60 flex items-center justify-end">
+        <div class="p-4 border-t border-slate-800 bg-slate-950/60 flex items-center justify-between">
             {% if job and job.is_finished %}
+                <div></div>
                 <button @click="open = false; setTimeout(() => { document.getElementById('modal-container').innerHTML = ''; window.location.reload(); }, 200)"
                         class="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition">
                     Aceptar y Actualizar
                 </button>
             {% elif error_message %}
+                <div></div>
                 <button @click="open = false; setTimeout(() => document.getElementById('modal-container').innerHTML = '', 200)"
                         class="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium transition">
                     Cerrar
                 </button>
             {% else %}
                 <div class="text-[11px] text-slate-400 flex items-center gap-2">
-                    <span>Procesando en segundo plano con Celery</span>
+                    <span>Celery Worker en curso</span>
                 </div>
+                <button @click="open = false; setTimeout(() => document.getElementById('modal-container').innerHTML = '', 200)"
+                        class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium transition">
+                    Ocultar modal
+                </button>
             {% endif %}
         </div>
     </div>
