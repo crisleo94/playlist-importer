@@ -66,7 +66,6 @@ def get_youtube_auth_url(state: str, redirect_uri: str = None) -> tuple[str, str
     flow = get_youtube_flow(state=state, redirect_uri=redirect_uri)
     authorization_url, _ = flow.authorization_url(
         access_type='offline',
-        include_granted_scopes='true',
         prompt='consent',
     )
     return authorization_url, flow.code_verifier
