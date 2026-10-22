@@ -46,3 +46,23 @@ class AccountsTests(TestCase):
 
         logout_response = self.client.post(reverse('accounts:logout'))
         self.assertRedirects(logout_response, reverse('accounts:login'))
+
+
+class LegalPagesTests(TestCase):
+    def setUp(self):
+        self.client = Client()
+
+    def test_privacy_policy_accessible_without_login(self):
+        response = self.client.get(reverse('privacy'))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Política de Privacidad')
+
+    def test_terms_of_service_accessible_without_login(self):
+        response = self.client.get(reverse('terms'))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Términos de Servicio')
+
+    def test_footer_links_to_legal_pages(self):
+        response = self.client.get(reverse('accounts:login'))
+        self.assertContains(response, reverse('privacy'))
+        self.assertContains(response, reverse('terms'))
