@@ -1012,3 +1012,111 @@ class ImportViewsTests(TestCase):
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Fallo de inserción")
+
+
+class ImportByUrlTests(TestCase):
+    def setUp(self):
+        cache.clear()
+        self.client = Client()
+        self.user = User.objects.create_user(username="url_user", password="password123")
+        self.client.login(username="url_user", password="password123")
+
+    def tearDown(self):
+        cache.clear()
+
+    def test_import_by_url_modal_view_renders(self):
+        url = reverse('importer:import_by_url_modal')
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Cargar Playlist por Enlace o ID")
+
+    def test_import_by_url_invalid_input(self):
+        url = reverse('importer:import_by_url')
+        response = self.client.post(url, {'playlist_url': 'invalid_string'})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "No pudimos reconocer el enlace o ID")
+
+    def test_import_by_url_missing_source_token(self):
+        url = reverse('importer:import_by_url')
+        # Spotify valid ID without Spotify token connected
+        response = self.client.post(url, {'playlist_url': '37i9dQZF1DXcBWIGoYBM5M'})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Debes conectar tu cuenta de Spotify")
+
+    def test_import_by_url_missing_target_token(self):
+        # Connect source token (Spotify) but no target token (YouTube)
+        PlatformToken.objects.create(
+            user=self.user,
+            platform=PlatformToken.PLATFORM_SPOTIFY,
+            platform_username="spotify_tester"
+        )
+        url = reverse('importer:import_by_url')
+        response = self.client.post(url, {'playlist_url': 'https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M?si=123'})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Debes conectar tu cuenta de YouTube Music")
+
+    @patch('apps.importer.views.get_spotify_playlist_details')
+    @patch('apps.importer.views.preview_playlist_match')
+    @patch('apps.importer.views.get_user_youtube_playlists')
+    def test_import_by_url_spotify_success(self, mock_get_yt_pl, mock_preview, mock_details):
+        PlatformToken.objects.create(user=self.user, platform=PlatformToken.PLATFORM_SPOTIFY)
+        PlatformToken.objects.create(user=self.user, platform=PlatformToken.PLATFORM_YOUTUBE)
+
+        mock_details.return_value = {'name': 'Shared Chill List'}
+        mock_get_yt_pl.return_value = [{'id': 'yt_1', 'name': 'My YT Dest'}]
+        mock_preview.return_value = {
+            'source_platform': 'spotify',
+            'target_platform': 'youtube',
+            'playlist_id': '37i9dQZF1DXcBWIGoYBM5M',
+            'total_tracks': 1,
+            'matched_count': 1,
+            'unmatched_count': 0,
+            'match_rate': 100.0,
+            'items': [
+                {
+                    'source': {'title': 'Track A', 'artist': 'Artist A'},
+                    'target': {'title': 'Track A YT', 'score': 0.95},
+                    'is_matched': True,
+                }
+            ],
+        }
+
+        url = reverse('importer:import_by_url')
+        response = self.client.post(url, {'playlist_url': 'https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M'})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Shared Chill List")
+        self.assertContains(response, "Track A")
+        self.assertContains(response, "Iniciar Transferencia")
+
+    @patch('apps.importer.views.get_youtube_playlist_details')
+    @patch('apps.importer.views.preview_playlist_match')
+    @patch('apps.importer.views.get_user_spotify_playlists')
+    def test_import_by_url_youtube_success(self, mock_get_sp_pl, mock_preview, mock_details):
+        PlatformToken.objects.create(user=self.user, platform=PlatformToken.PLATFORM_SPOTIFY)
+        PlatformToken.objects.create(user=self.user, platform=PlatformToken.PLATFORM_YOUTUBE)
+
+        mock_details.return_value = {'name': 'Collab YT Party'}
+        mock_get_sp_pl.return_value = [{'id': 'sp_1', 'name': 'My SP Dest'}]
+        mock_preview.return_value = {
+            'source_platform': 'youtube',
+            'target_platform': 'spotify',
+            'playlist_id': 'PLMC9KNkIncKtPzgY-5rmhvj7fax8fdxoj',
+            'total_tracks': 1,
+            'matched_count': 1,
+            'unmatched_count': 0,
+            'match_rate': 100.0,
+            'items': [
+                {
+                    'source': {'title': 'Video B', 'artist': 'Channel B'},
+                    'target': {'title': 'Track B', 'score': 0.90},
+                    'is_matched': True,
+                }
+            ],
+        }
+
+        url = reverse('importer:import_by_url')
+        response = self.client.post(url, {'playlist_url': 'https://music.youtube.com/playlist?list=PLMC9KNkIncKtPzgY-5rmhvj7fax8fdxoj&si=tracker'})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Collab YT Party")
+        self.assertContains(response, "Video B")
+        self.assertContains(response, "Iniciar Transferencia")

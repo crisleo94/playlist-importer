@@ -4,12 +4,22 @@
 
 {% block content %}
 <div class="space-y-6">
-    <!-- Header de Conexiones de Cuentas -->
+    <!-- Header de Conexiones de Cuentas y Acción Rápida -->
     <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-sm">
-        <div class="flex items-center justify-between mb-4">
+        <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-4">
             <div>
                 <h2 class="text-lg font-bold text-slate-100">Cuentas Vinculadas</h2>
                 <p class="text-xs text-slate-400 mt-0.5">Conecta ambas plataformas para habilitar la importación y sincronización de música.</p>
+            </div>
+
+            <!-- Botón Cargar por Enlace o ID -->
+            <div>
+                <button hx-get="{% url 'importer:import_by_url_modal' %}"
+                        hx-target="#modal-container"
+                        class="inline-flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold px-4 py-2.5 rounded-xl transition shadow-sm hover:text-white">
+                    <span>🔗</span>
+                    <span>Importar por enlace o ID</span>
+                </button>
             </div>
         </div>
 
@@ -169,12 +179,12 @@
                 <div class="relative">
                     <input type="text"
                            name="q"
-                           placeholder="Buscar playlist de YouTube Music..."
+                           placeholder="Buscar playlist de YouTube..."
                            hx-get="{% url 'importer:youtube_playlists' %}"
                            hx-trigger="keyup changed delay:300ms, search"
                            hx-target="#youtube-playlists-container"
                            hx-indicator="#youtube-spinner"
-                           class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500">
+                           class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500">
                 </div>
             {% endif %}
 
@@ -194,6 +204,6 @@
     </div>
 </div>
 
-<!-- Modal Container para previsualización de canciones -->
+<!-- Modal Container para HTMX -->
 <div id="modal-container"></div>
 {% endblock %}

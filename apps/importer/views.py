@@ -6,9 +6,18 @@ from django.views.decorators.http import require_POST
 from apps.importer.models import ImportJob, ImportJobItem
 from apps.importer.tasks import run_playlist_import
 from apps.integrations.models import PlatformToken
-from apps.integrations.spotify import get_user_spotify_playlists, get_spotify_playlist_tracks
-from apps.integrations.youtube import get_user_youtube_playlists, get_youtube_playlist_tracks
+from apps.integrations.spotify import (
+    get_user_spotify_playlists,
+    get_spotify_playlist_tracks,
+    get_spotify_playlist_details,
+)
+from apps.integrations.youtube import (
+    get_user_youtube_playlists,
+    get_youtube_playlist_tracks,
+    get_youtube_playlist_details,
+)
 from apps.importer.matcher import preview_playlist_match
+from apps.importer.parsers import parse_playlist_input
 
 logger = logging.getLogger(__name__)
 
@@ -138,6 +147,8 @@ def playlist_tracks_modal_view(request, platform, playlist_id):
             tracks = get_spotify_playlist_tracks(request.user, playlist_id, limit=100)
         elif platform == 'youtube':
             tracks = get_youtube_playlist_tracks(request.user, playlist_id, limit=100)
+        if total_tracks is None:
+            total_tracks = len(tracks)
     except Exception as e:
         logger.warning("Error al obtener canciones de %s (%s): %s", platform, playlist_id, e)
         error_message = "No se pudieron obtener las canciones de la lista seleccionada."
@@ -208,6 +219,99 @@ def preview_match_view(request, source_platform, playlist_id):
         'error_message': error_message,
     })
 
+
+@login_required
+def import_by_url_modal_view(request):
+    return render(request, 'importer/components/import_url_modal.html')
+
+
+@login_required
+@require_POST
+def import_by_url_view(request):
+    raw_input = request.POST.get('playlist_url', '').strip()
+    parsed = parse_playlist_input(raw_input)
+
+    if not parsed:
+        return render(request, 'importer/components/preview_match_modal.html', {
+            'source_platform': '',
+            'target_platform': '',
+            'playlist_id': '',
+            'playlist_name': 'Enlace inválido',
+            'preview': None,
+            'target_playlists': [],
+            'error_message': 'No pudimos reconocer el enlace o ID de la playlist. Asegúrate de que sea un enlace válido de Spotify o YouTube / YouTube Music.',
+        })
+
+    source_platform, playlist_id = parsed
+    target_platform = 'youtube' if source_platform == 'spotify' else 'spotify'
+
+    source_token = PlatformToken.objects.filter(user=request.user, platform=source_platform).first()
+    if not source_token:
+        source_name = 'Spotify' if source_platform == 'spotify' else 'YouTube Music'
+        return render(request, 'importer/components/preview_match_modal.html', {
+            'source_platform': source_platform,
+            'target_platform': target_platform,
+            'playlist_id': playlist_id,
+            'playlist_name': 'Cuenta no conectada',
+            'preview': None,
+            'target_playlists': [],
+            'error_message': f"Debes conectar tu cuenta de {source_name} para inspeccionar y leer playlists de esa plataforma.",
+        })
+
+    target_token = PlatformToken.objects.filter(user=request.user, platform=target_platform).first()
+    if not target_token:
+        target_name = 'YouTube Music' if target_platform == 'youtube' else 'Spotify'
+        return render(request, 'importer/components/preview_match_modal.html', {
+            'source_platform': source_platform,
+            'target_platform': target_platform,
+            'playlist_id': playlist_id,
+            'playlist_name': 'Cuenta destino requerida',
+            'preview': None,
+            'target_playlists': [],
+            'error_message': f"Debes conectar tu cuenta de {target_name} para poder transferir hacia ella.",
+        })
+
+    playlist_name = 'Playlist'
+    try:
+        if source_platform == 'spotify':
+            details = get_spotify_playlist_details(request.user, playlist_id)
+            playlist_name = details.get('name', 'Playlist de Spotify')
+        else:
+            details = get_youtube_playlist_details(request.user, playlist_id)
+            playlist_name = details.get('name', 'Playlist de YouTube')
+    except Exception as e:
+        logger.warning("No se pudo obtener detalles de playlist externa (%s, %s): %s", source_platform, playlist_id, e)
+
+    preview_data = None
+    target_playlists = []
+    error_message = None
+
+    try:
+        preview_data = preview_playlist_match(
+            request.user,
+            source_platform=source_platform,
+            target_platform=target_platform,
+            playlist_id=playlist_id,
+            limit=15
+        )
+
+        if target_platform == 'youtube':
+            target_playlists = get_user_youtube_playlists(request.user)
+        else:
+            target_playlists = get_user_spotify_playlists(request.user)
+    except Exception as e:
+        logger.warning("Error al previsualizar playlist por URL %s (%s): %s", source_platform, playlist_id, e)
+        error_message = "No se pudo leer la playlist. Verifica que sea pública o colaborativa y que tu cuenta tenga acceso a ella."
+
+    return render(request, 'importer/components/preview_match_modal.html', {
+        'source_platform': source_platform,
+        'target_platform': target_platform,
+        'playlist_id': playlist_id,
+        'playlist_name': playlist_name,
+        'preview': preview_data,
+        'target_playlists': target_playlists,
+        'error_message': error_message,
+    })
 
 
 @login_required
