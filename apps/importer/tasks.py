@@ -177,6 +177,8 @@ def run_playlist_import(self, job_id: int):
                                     pending.status = ImportJobItem.STATUS_ADDED
                                     pending.save(update_fields=['status'])
                                     job.successful_tracks += 1
+                                spotify_uri_batch = []
+                                pending_spotify_items = []
                             except Exception as e:
                                 logger.warning("Error al insertar lote en Spotify playlist: %s", e)
                                 is_quota = is_quota_or_rate_limit_error(e)

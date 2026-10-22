@@ -765,6 +765,58 @@ class CeleryImportTaskTests(TestCase):
         self.assertEqual(job.failed_tracks, 1)
         self.assertEqual(job.items.filter(status=ImportJobItem.STATUS_NOT_FOUND).count(), 1)
 
+    @patch('apps.importer.tasks.add_tracks_to_spotify_playlist')
+    @patch('apps.importer.tasks.match_youtube_track_to_spotify')
+    @patch('apps.importer.tasks.get_youtube_playlist_tracks')
+    @patch('apps.importer.tasks.get_spotify_client')
+    def test_run_playlist_import_spotify_batch_does_not_duplicate_across_flushes(
+        self, mock_sp_client, mock_get_tracks, mock_match, mock_add_tracks
+    ):
+        # Regression test: spotify_uri_batch/pending_spotify_items must be
+        # cleared after a *successful* flush too, not only on failure.
+        # Before the fix, a playlist with more than 25 matched tracks caused
+        # every flush past the first to resend the whole accumulated batch,
+        # inflating successful_tracks far past total_tracks and sending
+        # duplicate playlist_add_items calls to the real Spotify API.
+        num_tracks = 60
+        mock_get_tracks.return_value = [
+            {'id': f'v{i}', 'title': f'Song {i}', 'artist': 'Artist'}
+            for i in range(num_tracks)
+        ]
+        mock_match.side_effect = lambda user, track, sp_client=None: {
+            'id': track['id'],
+            'uri': f"spotify:track:{track['id']}",
+            'title': track['title'],
+            'artist': 'Artist',
+            'score': 0.9,
+        }
+        batch_sizes = []
+        mock_add_tracks.side_effect = lambda user, playlist_id, uris, sp_client=None: batch_sizes.append(len(uris))
+
+        job = ImportJob.objects.create(
+            user=self.user,
+            source_platform='youtube',
+            target_platform='spotify',
+            source_playlist_id='yt_src_60',
+            source_playlist_name='Nuestra Playlist',
+            destination_mode='existing',
+            target_playlist_id='sp_existing_id',
+            status=ImportJob.STATUS_PENDING
+        )
+
+        run_playlist_import(job.id)
+        job.refresh_from_db()
+
+        self.assertEqual(job.status, ImportJob.STATUS_COMPLETED)
+        self.assertEqual(job.total_tracks, num_tracks)
+        self.assertEqual(job.successful_tracks, num_tracks)
+        self.assertEqual(job.failed_tracks, 0)
+        self.assertEqual(job.items.count(), num_tracks)
+        # No batch should ever exceed the flush threshold, and the total
+        # number of URIs sent to Spotify must equal the track count exactly
+        # (no track sent twice).
+        self.assertTrue(all(size <= 25 for size in batch_sizes), batch_sizes)
+        self.assertEqual(sum(batch_sizes), num_tracks)
 
     @patch('apps.importer.tasks.get_spotify_playlist_tracks')
     def test_run_playlist_import_soft_time_limit_exceeded(self, mock_get_tracks):
