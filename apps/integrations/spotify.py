@@ -155,3 +155,29 @@ def get_spotify_playlist_tracks(user, playlist_id: str, limit: int = 100) -> lis
         offset += len(items)
 
     return tracks
+
+
+def create_spotify_playlist(user, name: str, description: str = '', public: bool = False, sp_client=None) -> dict:
+    sp = sp_client if sp_client is not None else get_spotify_client(user)
+    current_user = sp.me()
+    user_id = current_user['id']
+    playlist = sp.user_playlist_create(
+        user=user_id,
+        name=name,
+        public=public,
+        description=description or 'Imported via Playlist Importer'
+    )
+    return {
+        'id': playlist['id'],
+        'name': playlist['name'],
+        'external_url': playlist.get('external_urls', {}).get('spotify', ''),
+    }
+
+
+def add_tracks_to_spotify_playlist(user, playlist_id: str, track_uris: list[str], sp_client=None) -> None:
+    if not track_uris:
+        return
+    sp = sp_client if sp_client is not None else get_spotify_client(user)
+    for i in range(0, len(track_uris), 100):
+        chunk = track_uris[i:i + 100]
+        sp.playlist_add_items(playlist_id, chunk)

@@ -136,11 +136,24 @@
             </button>
 
             {% if preview and not error_message %}
-                <button @click="alert('En la siguiente tarea (TASK-005) este botón encola la tarea Celery real con seguimiento en vivo.')"
-                        class="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition flex items-center gap-1.5 shadow-md shadow-emerald-950">
-                    <span>Iniciar Transferencia</span>
-                    <span>➔</span>
-                </button>
+                <form id="start-import-form"
+                      hx-post="{% url 'importer:start_import' %}"
+                      hx-target="#modal-container"
+                      class="flex items-center">
+                    {% csrf_token %}
+                    <input type="hidden" name="source_platform" value="{{ source_platform }}">
+                    <input type="hidden" name="source_playlist_id" value="{{ playlist_id }}">
+                    <input type="hidden" name="source_playlist_name" value="{{ playlist_name }}">
+                    <input type="hidden" name="dest_mode" :value="destinationMode">
+                    <input type="hidden" name="new_playlist_name" :value="newPlaylistName">
+                    <input type="hidden" name="selected_playlist_id" :value="selectedPlaylistId">
+
+                    <button type="submit"
+                            class="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition flex items-center gap-1.5 shadow-md shadow-emerald-950 cursor-pointer">
+                        <span>Iniciar Transferencia</span>
+                        <span>➔</span>
+                    </button>
+                </form>
             {% endif %}
         </div>
     </div>

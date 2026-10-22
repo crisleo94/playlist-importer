@@ -1,7 +1,10 @@
 import logging
 from django.contrib.auth.decorators import login_required
 from django.core.cache import cache
-from django.shortcuts import render
+from django.shortcuts import get_object_or_404, render
+from django.views.decorators.http import require_POST
+from apps.importer.models import ImportJob, ImportJobItem
+from apps.importer.tasks import run_playlist_import
 from apps.integrations.models import PlatformToken
 from apps.integrations.spotify import get_user_spotify_playlists, get_spotify_playlist_tracks
 from apps.integrations.youtube import get_user_youtube_playlists, get_youtube_playlist_tracks
@@ -203,4 +206,62 @@ def preview_match_view(request, source_platform, playlist_id):
         'preview': preview_data,
         'target_playlists': target_playlists,
         'error_message': error_message,
+    })
+
+
+
+@login_required
+@require_POST
+def start_import_view(request):
+    source_platform = request.POST.get('source_platform', '')
+    source_playlist_id = request.POST.get('source_playlist_id', '')
+    source_playlist_name = request.POST.get('source_playlist_name', 'Playlist')
+    dest_mode = request.POST.get('dest_mode', ImportJob.DEST_MODE_NEW)
+    new_playlist_name = request.POST.get('new_playlist_name', '').strip() or source_playlist_name
+    selected_playlist_id = request.POST.get('selected_playlist_id', '').strip()
+
+    if source_platform not in ('spotify', 'youtube') or not source_playlist_id:
+        return render(request, 'importer/components/import_progress.html', {
+            'error_message': 'Datos de importación inválidos.',
+        })
+
+    target_platform = 'youtube' if source_platform == 'spotify' else 'spotify'
+    target_token = PlatformToken.objects.filter(user=request.user, platform=target_platform).first()
+    if not target_token:
+        target_name = 'YouTube Music' if target_platform == 'youtube' else 'Spotify'
+        return render(request, 'importer/components/import_progress.html', {
+            'error_message': f"Debes conectar tu cuenta de {target_name} antes de iniciar la importación.",
+        })
+
+    job = ImportJob.objects.create(
+        user=request.user,
+        source_platform=source_platform,
+        target_platform=target_platform,
+        source_playlist_id=source_playlist_id,
+        source_playlist_name=source_playlist_name,
+        destination_mode=dest_mode,
+        target_playlist_id=selected_playlist_id if dest_mode == ImportJob.DEST_MODE_EXISTING else '',
+        target_playlist_name=new_playlist_name if dest_mode == ImportJob.DEST_MODE_NEW else '',
+        status=ImportJob.STATUS_PENDING,
+    )
+
+    task = run_playlist_import.delay(job.id)
+    job.celery_task_id = task.id or ''
+    job.save(update_fields=['celery_task_id'])
+
+    return render(request, 'importer/components/import_progress.html', {
+        'job': job,
+    })
+
+
+@login_required
+def import_progress_view(request, job_id):
+    job = get_object_or_404(ImportJob, id=job_id, user=request.user)
+    unmatched_items = []
+    if job.is_finished:
+        unmatched_items = list(job.items.filter(status=ImportJobItem.STATUS_NOT_FOUND)[:50])
+
+    return render(request, 'importer/components/import_progress.html', {
+        'job': job,
+        'unmatched_items': unmatched_items,
     })

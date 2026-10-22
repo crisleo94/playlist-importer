@@ -559,3 +559,358 @@ class PreviewMatchModalViewTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "No se pudo generar la vista previa de coincidencia")
         self.assertNotContains(response, "Internal RateLimit 429")
+
+
+from apps.importer.models import ImportJob, ImportJobItem
+from apps.importer.tasks import run_playlist_import
+from apps.integrations.spotify import create_spotify_playlist, add_tracks_to_spotify_playlist
+from apps.integrations.youtube import create_youtube_playlist, add_video_to_youtube_playlist
+
+
+class ImportModelsTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username="model_user", password="password123")
+
+    def test_import_job_properties(self):
+        job = ImportJob.objects.create(
+            user=self.user,
+            source_platform='spotify',
+            target_platform='youtube',
+            source_playlist_id='sp_1',
+            source_playlist_name='Rock Classics',
+            total_tracks=10,
+            processed_tracks=5,
+            status=ImportJob.STATUS_PROCESSING
+        )
+        self.assertEqual(job.progress_percentage, 50)
+        self.assertFalse(job.is_finished)
+
+        job.status = ImportJob.STATUS_COMPLETED
+        self.assertTrue(job.is_finished)
+
+        # Division by zero safety
+        job.total_tracks = 0
+        self.assertEqual(job.progress_percentage, 0)
+
+    def test_import_job_item_creation(self):
+        job = ImportJob.objects.create(
+            user=self.user,
+            source_platform='spotify',
+            target_platform='youtube',
+            source_playlist_id='sp_1',
+            source_playlist_name='Rock Classics',
+        )
+        item = ImportJobItem.objects.create(
+            job=job,
+            source_title='Bohemian Rhapsody',
+            source_artist='Queen',
+            target_title='Bohemian Rhapsody (Video)',
+            status=ImportJobItem.STATUS_ADDED
+        )
+        self.assertIn("Bohemian Rhapsody", str(item))
+        self.assertEqual(item.status, ImportJobItem.STATUS_ADDED)
+
+
+class IntegrationsWriteHelpersTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username="write_user", password="password123")
+
+    @patch('apps.integrations.spotify.get_spotify_client')
+    def test_create_spotify_playlist(self, mock_get_sp):
+        mock_sp = MagicMock()
+        mock_get_sp.return_value = mock_sp
+        mock_sp.me.return_value = {'id': 'spot_uid'}
+        mock_sp.user_playlist_create.return_value = {
+            'id': 'new_sp_pl',
+            'name': 'My New Spotify List',
+            'external_urls': {'spotify': 'https://open.spotify.com/playlist/new_sp_pl'}
+        }
+
+        res = create_spotify_playlist(self.user, 'My New Spotify List')
+        self.assertEqual(res['id'], 'new_sp_pl')
+        self.assertEqual(res['name'], 'My New Spotify List')
+        mock_sp.user_playlist_create.assert_called_once()
+
+    @patch('apps.integrations.spotify.get_spotify_client')
+    def test_add_tracks_to_spotify_playlist_chunks_calls(self, mock_get_sp):
+        mock_sp = MagicMock()
+        mock_get_sp.return_value = mock_sp
+
+        # 150 tracks should chunk into 2 calls (100 + 50)
+        uris = [f"spotify:track:{i}" for i in range(150)]
+        add_tracks_to_spotify_playlist(self.user, 'pl_123', uris)
+        self.assertEqual(mock_sp.playlist_add_items.call_count, 2)
+
+    @patch('apps.integrations.youtube.get_youtube_client')
+    def test_create_youtube_playlist(self, mock_get_yt):
+        mock_yt = MagicMock()
+        mock_get_yt.return_value = mock_yt
+        mock_yt.playlists().insert().execute.return_value = {
+            'id': 'yt_new_pl',
+            'snippet': {'title': 'My New YouTube List'}
+        }
+
+        res = create_youtube_playlist(self.user, 'My New YouTube List')
+        self.assertEqual(res['id'], 'yt_new_pl')
+        self.assertEqual(res['name'], 'My New YouTube List')
+
+    @patch('apps.integrations.youtube.get_youtube_client')
+    def test_add_video_to_youtube_playlist(self, mock_get_yt):
+        mock_yt = MagicMock()
+        mock_get_yt.return_value = mock_yt
+        mock_yt.playlistItems().insert().execute.return_value = {'id': 'item_123'}
+
+        res = add_video_to_youtube_playlist(self.user, 'yt_pl', 'video_abc')
+        self.assertEqual(res['id'], 'item_123')
+
+
+class CeleryImportTaskTests(TestCase):
+    def setUp(self):
+        cache.clear()
+        self.user = User.objects.create_user(username="task_user", password="password123")
+
+    def tearDown(self):
+        cache.clear()
+
+    def test_run_playlist_import_nonexistent_job(self):
+        # Should not raise exception
+        run_playlist_import(999999)
+
+    def test_run_playlist_import_already_finished(self):
+        job = ImportJob.objects.create(
+            user=self.user,
+            source_platform='spotify',
+            target_platform='youtube',
+            source_playlist_id='sp_1',
+            source_playlist_name='List',
+            status=ImportJob.STATUS_COMPLETED
+        )
+        run_playlist_import(job.id)
+        job.refresh_from_db()
+        self.assertEqual(job.status, ImportJob.STATUS_COMPLETED)
+
+    @patch('apps.importer.tasks.add_video_to_youtube_playlist')
+    @patch('apps.importer.tasks.create_youtube_playlist')
+    @patch('apps.importer.tasks.match_spotify_track_to_youtube')
+    @patch('apps.importer.tasks.get_spotify_playlist_tracks')
+    @patch('apps.importer.tasks.get_youtube_client')
+    def test_run_playlist_import_spotify_to_youtube_happy_path(
+        self, mock_yt_client, mock_get_tracks, mock_match, mock_create_yt, mock_add_video
+    ):
+        mock_get_tracks.return_value = [
+            {'id': 't1', 'title': 'Song 1', 'artist': 'Artist 1', 'isrc': 'ISRC1'},
+            {'id': 't2', 'title': 'Song 2', 'artist': 'Artist 2', 'isrc': 'ISRC2'},
+        ]
+        mock_create_yt.return_value = {'id': 'yt_created_1', 'name': 'Rock Mix (Imported)'}
+        mock_match.side_effect = [
+            {'id': 'vid_1', 'title': 'Song 1', 'artist': 'Artist 1', 'score': 0.95, 'match_type': 'isrc'},
+            {'id': 'vid_2', 'title': 'Song 2', 'artist': 'Artist 2', 'score': 0.88, 'match_type': 'fuzzy'},
+        ]
+
+        job = ImportJob.objects.create(
+            user=self.user,
+            source_platform='spotify',
+            target_platform='youtube',
+            source_playlist_id='sp_src',
+            source_playlist_name='Rock Mix',
+            destination_mode='new',
+            status=ImportJob.STATUS_PENDING
+        )
+
+        run_playlist_import(job.id)
+        job.refresh_from_db()
+
+        self.assertEqual(job.status, ImportJob.STATUS_COMPLETED)
+        self.assertEqual(job.total_tracks, 2)
+        self.assertEqual(job.successful_tracks, 2)
+        self.assertEqual(job.failed_tracks, 0)
+        self.assertEqual(job.target_playlist_id, 'yt_created_1')
+        self.assertEqual(mock_add_video.call_count, 2)
+        self.assertEqual(job.items.count(), 2)
+
+    @patch('apps.importer.tasks.add_tracks_to_spotify_playlist')
+    @patch('apps.importer.tasks.match_youtube_track_to_spotify')
+    @patch('apps.importer.tasks.get_youtube_playlist_tracks')
+    @patch('apps.importer.tasks.get_spotify_client')
+    def test_run_playlist_import_partial_matching(
+        self, mock_sp_client, mock_get_tracks, mock_match, mock_add_tracks
+    ):
+        mock_get_tracks.return_value = [
+            {'id': 'v1', 'title': 'Known Song', 'artist': 'Band'},
+            {'id': 'v2', 'title': 'Obscure Track Nobody Knows', 'artist': 'Unknown'},
+        ]
+        # First track matches, second track does not
+        mock_match.side_effect = [
+            {'id': 'sp_trk_1', 'uri': 'spotify:track:sp_trk_1', 'title': 'Known Song', 'artist': 'Band', 'score': 0.9},
+            None,
+        ]
+
+        job = ImportJob.objects.create(
+            user=self.user,
+            source_platform='youtube',
+            target_platform='spotify',
+            source_playlist_id='yt_src',
+            source_playlist_name='Drive Vibes',
+            destination_mode='existing',
+            target_playlist_id='sp_existing_id',
+            status=ImportJob.STATUS_PENDING
+        )
+
+        run_playlist_import(job.id)
+        job.refresh_from_db()
+
+        self.assertEqual(job.status, ImportJob.STATUS_PARTIAL)
+        self.assertEqual(job.total_tracks, 2)
+        self.assertEqual(job.successful_tracks, 1)
+        self.assertEqual(job.failed_tracks, 1)
+        self.assertEqual(job.items.filter(status=ImportJobItem.STATUS_NOT_FOUND).count(), 1)
+
+
+class ImportViewsTests(TestCase):
+    def setUp(self):
+        cache.clear()
+        self.client = Client()
+        self.user = User.objects.create_user(username="view_user", password="password123")
+
+    def tearDown(self):
+        cache.clear()
+
+    def test_start_import_requires_login(self):
+        url = reverse('importer:start_import')
+        response = self.client.post(url, {})
+        self.assertEqual(response.status_code, 302)
+
+    def test_start_import_requires_post(self):
+        self.client.login(username="view_user", password="password123")
+        url = reverse('importer:start_import')
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 405)
+
+    def test_start_import_invalid_platform(self):
+        self.client.login(username="view_user", password="password123")
+        url = reverse('importer:start_import')
+        response = self.client.post(url, {
+            'source_platform': 'invalid_app',
+            'source_playlist_id': '123'
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Datos de importación inválidos")
+
+    def test_start_import_target_not_connected(self):
+        self.client.login(username="view_user", password="password123")
+        url = reverse('importer:start_import')
+        response = self.client.post(url, {
+            'source_platform': 'spotify',
+            'source_playlist_id': 'sp_123',
+            'source_playlist_name': 'My List',
+            'dest_mode': 'new',
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Debes conectar tu cuenta de YouTube Music")
+
+    @patch('apps.importer.views.run_playlist_import.delay')
+    def test_start_import_happy_path_enqueues_celery(self, mock_delay):
+        self.client.login(username="view_user", password="password123")
+        # Target (youtube) token exists
+        token = PlatformToken.objects.create(
+            user=self.user,
+            platform=PlatformToken.PLATFORM_YOUTUBE
+        )
+        token.set_access_token("valid_token")
+        token.save()
+
+        mock_delay.return_value = MagicMock(id='celery_task_uuid_123')
+
+        url = reverse('importer:start_import')
+        response = self.client.post(url, {
+            'source_platform': 'spotify',
+            'source_playlist_id': 'sp_123',
+            'source_playlist_name': 'My Rock List',
+            'dest_mode': 'new',
+            'new_playlist_name': 'My Rock List (YT)',
+        })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Progreso de Importación")
+        self.assertContains(response, "My Rock List")
+        self.assertContains(response, 'hx-trigger="every 1.5s"')
+
+        job = ImportJob.objects.filter(user=self.user).first()
+        self.assertIsNotNone(job)
+        self.assertEqual(job.celery_task_id, 'celery_task_uuid_123')
+        mock_delay.assert_called_once_with(job.id)
+
+    def test_import_progress_view_in_progress(self):
+        self.client.login(username="view_user", password="password123")
+        job = ImportJob.objects.create(
+            user=self.user,
+            source_platform='spotify',
+            target_platform='youtube',
+            source_playlist_id='sp_1',
+            source_playlist_name='In Flight Playlist',
+            total_tracks=20,
+            processed_tracks=10,
+            successful_tracks=9,
+            failed_tracks=1,
+            current_track_name='Currently Processing Song',
+            status=ImportJob.STATUS_PROCESSING
+        )
+
+        url = reverse('importer:import_progress', kwargs={'job_id': job.id})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Transfiriendo canciones...")
+        self.assertContains(response, "50%")
+        self.assertContains(response, "Currently Processing Song")
+        self.assertContains(response, 'hx-trigger="every 1.5s"')
+
+    def test_import_progress_view_finished_completed(self):
+        self.client.login(username="view_user", password="password123")
+        job = ImportJob.objects.create(
+            user=self.user,
+            source_platform='spotify',
+            target_platform='youtube',
+            source_playlist_id='sp_1',
+            source_playlist_name='Finished Playlist',
+            total_tracks=15,
+            processed_tracks=15,
+            successful_tracks=15,
+            failed_tracks=0,
+            status=ImportJob.STATUS_COMPLETED
+        )
+
+        url = reverse('importer:import_progress', kwargs={'job_id': job.id})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "¡Importación Completada con Éxito!")
+        self.assertNotContains(response, 'hx-trigger="every 1.5s"')
+        self.assertContains(response, "Aceptar y Actualizar")
+
+    def test_import_progress_view_finished_partial_shows_unmatched_items(self):
+        self.client.login(username="view_user", password="password123")
+        job = ImportJob.objects.create(
+            user=self.user,
+            source_platform='youtube',
+            target_platform='spotify',
+            source_playlist_id='yt_1',
+            source_playlist_name='Partial Playlist',
+            total_tracks=10,
+            processed_tracks=10,
+            successful_tracks=8,
+            failed_tracks=2,
+            status=ImportJob.STATUS_PARTIAL
+        )
+        ImportJobItem.objects.create(
+            job=job,
+            source_title='Unmatched Rare Demo',
+            source_artist='Underground Band',
+            status=ImportJobItem.STATUS_NOT_FOUND
+        )
+
+        url = reverse('importer:import_progress', kwargs={'job_id': job.id})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Importación Parcialmente Completada")
+        self.assertContains(response, "Unmatched Rare Demo")
+        self.assertContains(response, "Underground Band")
+        self.assertContains(response, "Sin coincidencia")
