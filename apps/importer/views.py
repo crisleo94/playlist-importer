@@ -24,6 +24,21 @@ logger = logging.getLogger(__name__)
 CACHE_TTL_PLAYLISTS = 120
 
 
+def _suggest_matching_playlist_id(source_name: str, target_playlists: list[dict]) -> str:
+    """Devuelve el id de la playlist destino cuyo nombre coincide (case-insensitive,
+    sin espacios en los extremos) con el nombre de la playlist origen, o '' si ninguna
+    coincide. Es solo una sugerencia preseleccionada en la UI -- nunca decide por sí
+    sola el destino, el usuario siempre confirma o cambia la selección antes de
+    transferir."""
+    normalized_source = (source_name or '').strip().lower()
+    if not normalized_source:
+        return ''
+    for playlist in target_playlists:
+        if (playlist.get('name') or '').strip().lower() == normalized_source:
+            return playlist.get('id', '')
+    return ''
+
+
 @login_required
 def dashboard_view(request):
     tokens = {
@@ -209,6 +224,7 @@ def preview_match_view(request, source_platform, playlist_id):
             logger.warning("Error al generar vista previa de emparejamiento %s -> %s: %s", source_platform, target_platform, e)
             error_message = "No se pudo generar la vista previa de coincidencia. Por favor, intenta de nuevo."
 
+    suggested_target_playlist_id = _suggest_matching_playlist_id(playlist_name, target_playlists)
     return render(request, 'importer/components/preview_match_modal.html', {
         'source_platform': source_platform,
         'target_platform': target_platform,
@@ -216,6 +232,8 @@ def preview_match_view(request, source_platform, playlist_id):
         'playlist_name': playlist_name,
         'preview': preview_data,
         'target_playlists': target_playlists,
+        'suggested_target_playlist_id': suggested_target_playlist_id,
+        'default_selected_playlist_id': suggested_target_playlist_id or (target_playlists[0]['id'] if target_playlists else ''),
         'error_message': error_message,
     })
 
@@ -303,6 +321,7 @@ def import_by_url_view(request):
         logger.warning("Error al previsualizar playlist por URL %s (%s): %s", source_platform, playlist_id, e)
         error_message = "No se pudo leer la playlist. Verifica que sea pública o colaborativa y que tu cuenta tenga acceso a ella."
 
+    suggested_target_playlist_id = _suggest_matching_playlist_id(playlist_name, target_playlists)
     return render(request, 'importer/components/preview_match_modal.html', {
         'source_platform': source_platform,
         'target_platform': target_platform,
@@ -310,6 +329,8 @@ def import_by_url_view(request):
         'playlist_name': playlist_name,
         'preview': preview_data,
         'target_playlists': target_playlists,
+        'suggested_target_playlist_id': suggested_target_playlist_id,
+        'default_selected_playlist_id': suggested_target_playlist_id or (target_playlists[0]['id'] if target_playlists else ''),
         'error_message': error_message,
     })
 

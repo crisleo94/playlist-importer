@@ -560,6 +560,75 @@ class PreviewMatchModalViewTests(TestCase):
         self.assertContains(response, "No se pudo generar la vista previa de coincidencia")
         self.assertNotContains(response, "Internal RateLimit 429")
 
+    @patch('apps.importer.views.get_user_youtube_playlists')
+    @patch('apps.importer.views.preview_playlist_match')
+    def test_preview_suggests_existing_playlist_matching_by_name(self, mock_preview, mock_get_target_playlists):
+        # TASK-010 AC-3: a destination playlist whose name matches the source
+        # (case-insensitive, trimmed) is preselected in the UI, without
+        # auto-confirming anything -- the user still has to submit the form.
+        self.client.login(username="modal_user", password="password123")
+        token = PlatformToken.objects.create(user=self.user, platform=PlatformToken.PLATFORM_YOUTUBE)
+        token.set_access_token("valid_token")
+        token.save()
+
+        mock_preview.return_value = {
+            'source_platform': 'spotify', 'target_platform': 'youtube', 'playlist_id': 'sp_1',
+            'total_tracks': 1, 'matched_count': 1, 'unmatched_count': 0, 'match_rate': 100.0, 'items': [],
+        }
+        mock_get_target_playlists.return_value = [
+            {'id': 'yt_unrelated', 'name': 'Some Other List'},
+            {'id': 'yt_match', 'name': '  road trip 2026  '},
+        ]
+
+        url = reverse('importer:preview_match', kwargs={'source_platform': 'spotify', 'playlist_id': 'sp_1'})
+        response = self.client.get(f"{url}?name=Road+Trip+2026")
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "selectedPlaylistId: 'yt_match'")
+        self.assertContains(response, "destinationMode: 'existing'")
+        self.assertContains(response, "Sugerido")
+
+    @patch('apps.importer.views.get_user_youtube_playlists')
+    @patch('apps.importer.views.preview_playlist_match')
+    def test_preview_no_suggestion_when_no_name_matches(self, mock_preview, mock_get_target_playlists):
+        self.client.login(username="modal_user", password="password123")
+        token = PlatformToken.objects.create(user=self.user, platform=PlatformToken.PLATFORM_YOUTUBE)
+        token.set_access_token("valid_token")
+        token.save()
+
+        mock_preview.return_value = {
+            'source_platform': 'spotify', 'target_platform': 'youtube', 'playlist_id': 'sp_1',
+            'total_tracks': 1, 'matched_count': 1, 'unmatched_count': 0, 'match_rate': 100.0, 'items': [],
+        }
+        mock_get_target_playlists.return_value = [{'id': 'yt_unrelated', 'name': 'Some Other List'}]
+
+        url = reverse('importer:preview_match', kwargs={'source_platform': 'spotify', 'playlist_id': 'sp_1'})
+        response = self.client.get(f"{url}?name=Road+Trip+2026")
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "destinationMode: 'new'")
+        self.assertNotContains(response, "Sugerido")
+
+
+class SuggestMatchingPlaylistTests(TestCase):
+    def test_exact_match(self):
+        from apps.importer.views import _suggest_matching_playlist_id
+        playlists = [{'id': 'a', 'name': 'Road Trip 2026'}]
+        self.assertEqual(_suggest_matching_playlist_id('Road Trip 2026', playlists), 'a')
+
+    def test_case_and_whitespace_insensitive(self):
+        from apps.importer.views import _suggest_matching_playlist_id
+        playlists = [{'id': 'a', 'name': '  road trip 2026  '}]
+        self.assertEqual(_suggest_matching_playlist_id('ROAD TRIP 2026', playlists), 'a')
+
+    def test_no_match_returns_empty(self):
+        from apps.importer.views import _suggest_matching_playlist_id
+        playlists = [{'id': 'a', 'name': 'Completely Different'}]
+        self.assertEqual(_suggest_matching_playlist_id('Road Trip 2026', playlists), '')
+
+    def test_empty_inputs_return_empty(self):
+        from apps.importer.views import _suggest_matching_playlist_id
+        self.assertEqual(_suggest_matching_playlist_id('', [{'id': 'a', 'name': 'Anything'}]), '')
+        self.assertEqual(_suggest_matching_playlist_id('Road Trip 2026', []), '')
+
 
 from apps.importer.models import ImportJob, ImportJobItem
 from apps.importer.tasks import run_playlist_import

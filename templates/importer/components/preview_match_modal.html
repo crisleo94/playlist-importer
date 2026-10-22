@@ -2,9 +2,9 @@
      x-data="{
         open: true,
         submitting: false,
-        destinationMode: 'new',
+        destinationMode: '{{ suggested_target_playlist_id|yesno:"existing,new" }}',
         newPlaylistName: '{{ playlist_name|escapejs }}',
-        selectedPlaylistId: '{{ target_playlists.0.id|default:"" }}'
+        selectedPlaylistId: '{{ default_selected_playlist_id|default:"" }}'
      }"
      x-show="open"
      x-transition:enter="transition ease-out duration-200"
@@ -87,6 +87,11 @@
                             <label class="flex items-center gap-2.5 text-xs text-slate-300 cursor-pointer pt-1">
                                 <input type="radio" name="dest_mode" value="existing" x-model="destinationMode" class="text-emerald-500 focus:ring-0">
                                 <span>Volcar / Fusionar en una <strong>playlist existente</strong></span>
+                                {% if suggested_target_playlist_id %}
+                                    <span class="text-[10px] bg-sky-950/60 text-sky-300 border border-sky-800/60 px-1.5 py-0.5 rounded-full font-medium" title="El nombre coincide con la playlist de origen -- confirmá o elegí otra antes de transferir">
+                                        Sugerido
+                                    </span>
+                                {% endif %}
                             </label>
                             <div x-show="destinationMode === 'existing'" class="pl-6">
                                 <select x-model="selectedPlaylistId"
