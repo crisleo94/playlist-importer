@@ -5,6 +5,7 @@ from django.shortcuts import render
 from apps.integrations.models import PlatformToken
 from apps.integrations.spotify import get_user_spotify_playlists, get_spotify_playlist_tracks
 from apps.integrations.youtube import get_user_youtube_playlists, get_youtube_playlist_tracks
+from apps.importer.matcher import preview_playlist_match
 
 logger = logging.getLogger(__name__)
 
@@ -144,5 +145,62 @@ def playlist_tracks_modal_view(request, platform, playlist_id):
         'playlist_name': playlist_name,
         'tracks': tracks,
         'total_tracks': total_tracks,
+        'error_message': error_message,
+    })
+
+
+@login_required
+def preview_match_view(request, source_platform, playlist_id):
+    playlist_name = request.GET.get('name', 'Playlist')
+    preview_data = None
+    target_playlists = []
+    error_message = None
+
+    if source_platform not in ('spotify', 'youtube'):
+        return render(request, 'importer/components/preview_match_modal.html', {
+            'source_platform': source_platform,
+            'target_platform': '',
+            'playlist_id': playlist_id,
+            'playlist_name': playlist_name,
+            'preview': None,
+            'target_playlists': [],
+            'error_message': 'Plataforma no soportada.',
+        })
+
+    target_platform = 'youtube' if source_platform == 'spotify' else 'spotify'
+
+    target_token = PlatformToken.objects.filter(
+        user=request.user,
+        platform=target_platform
+    ).first()
+
+    if not target_token:
+        target_name = 'YouTube Music' if target_platform == 'youtube' else 'Spotify'
+        error_message = f"Debes conectar tu cuenta de {target_name} para poder transferir hacia ella."
+    else:
+        try:
+            preview_data = preview_playlist_match(
+                request.user,
+                source_platform=source_platform,
+                target_platform=target_platform,
+                playlist_id=playlist_id,
+                limit=30
+            )
+
+            if target_platform == 'youtube':
+                target_playlists = get_user_youtube_playlists(request.user)
+            else:
+                target_playlists = get_user_spotify_playlists(request.user)
+        except Exception as e:
+            logger.warning("Error al generar vista previa de emparejamiento %s -> %s: %s", source_platform, target_platform, e)
+            error_message = "No se pudo generar la vista previa de coincidencia. Por favor, intenta de nuevo."
+
+    return render(request, 'importer/components/preview_match_modal.html', {
+        'source_platform': source_platform,
+        'target_platform': target_platform,
+        'playlist_id': playlist_id,
+        'playlist_name': playlist_name,
+        'preview': preview_data,
+        'target_playlists': target_playlists,
         'error_message': error_message,
     })
